@@ -453,8 +453,9 @@ final class AppState: ObservableObject {
       annotations: annotations,
       strokeWidth: strokeWidth
     )
-    DiskExporter.savePNG(composite)
-    statusMessage = "Saved"
+    if DiskExporter.savePNG(composite) {
+      statusMessage = "Saved"
+    }
   }
 
   func saveAndQuit() {

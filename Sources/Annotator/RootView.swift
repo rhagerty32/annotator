@@ -1,12 +1,27 @@
 import SwiftUI
 
 enum AnnotatorChrome {
-  static let minWidth: CGFloat = 1100
-  static let minHeight: CGFloat = 760
+  static let minWidth: CGFloat = 960
+  static let minHeight: CGFloat = 640
   static let toolbarHeight: CGFloat = 64
+  static let statusBarHeight: CGFloat = 34
   static let canvasPadding: CGFloat = 72
   static let minZoom: CGFloat = 1
   static let maxZoom: CGFloat = 16
+
+  /// Cap at ~80% of the visible screen so the editor is not edge-to-edge.
+  static func windowSize(for image: NSSize, visible: NSRect) -> NSSize {
+    let chrome = NSSize(
+      width: canvasPadding * 2,
+      height: toolbarHeight + statusBarHeight + canvasPadding * 2
+    )
+    let maxW = max(minWidth, min(visible.width * 0.8, visible.width - 80))
+    let maxH = max(minHeight, min(visible.height * 0.8, visible.height - 80))
+    return NSSize(
+      width: min(maxW, max(minWidth, image.width + chrome.width)),
+      height: min(maxH, max(minHeight, image.height + chrome.height))
+    )
+  }
 
   static let bar = Color(red: 0.11, green: 0.11, blue: 0.12)
   static let void = Color(red: 0.055, green: 0.055, blue: 0.06)

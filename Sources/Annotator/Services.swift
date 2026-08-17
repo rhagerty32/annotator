@@ -11,7 +11,8 @@ enum CaptureService {
     window: Bool = false,
     delaySeconds: Int = 0,
     fullScreen: Bool = false,
-    repeatLast: Bool = false
+    repeatLast: Bool = false,
+    locateRegion: Bool = true
   ) -> URL? {
     let url = FileManager.default.temporaryDirectory
       .appendingPathComponent("annotator-\(UUID().uuidString).png")
@@ -37,42 +38,34 @@ enum CaptureService {
       return run(["-x", "-w", url.path], to: url) ? url : nil
     }
 
-    let screen = screenUnderMouse()
-    let snapshotURL = FileManager.default.temporaryDirectory
-      .appendingPathComponent("annotator-snap-\(UUID().uuidString).png")
-    let snapQuartz = quartzRect(screen.frame)
-    _ = run(["-x", "-R", rectString(snapQuartz), snapshotURL.path], to: snapshotURL)
+    // Interactive region: show the picker immediately. Last-region storage
+    // comes from the drag rect (no full-screen snapshot + pixel hunt).
+    let tracker: DragRectTracker? = locateRegion ? DragRectTracker() : nil
+    tracker?.start()
+    defer { tracker?.stop() }
 
-    guard run(["-x", "-i", url.path], to: url) else {
-      try? FileManager.default.removeItem(at: snapshotURL)
+    guard run(["-x", "-i", url.path], to: url, pump: locateRegion) else {
       return nil
     }
-
-    if let snap = NSImage(contentsOf: snapshotURL),
-       let region = NSImage(contentsOf: url),
-       let origin = RegionLocator.origin(of: region, in: snap)
-    {
-      let scaleX = screen.frame.width / max(snap.size.width, 1)
-      let scaleY = screen.frame.height / max(snap.size.height, 1)
-      let cocoa = CGRect(
-        x: screen.frame.minX + origin.x * scaleX,
-        y: screen.frame.maxY - (origin.y + region.size.height) * scaleY,
-        width: region.size.width * scaleX,
-        height: region.size.height * scaleY
-      )
+    if let cocoa = tracker?.rect {
       store(quartzRect(cocoa))
     }
-    try? FileManager.default.removeItem(at: snapshotURL)
     return url
   }
 
-  private static func run(_ args: [String], to url: URL) -> Bool {
+  private static func run(_ args: [String], to url: URL, pump: Bool = false) -> Bool {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
     process.arguments = args
     do {
       try process.run()
-      process.waitUntilExit()
+      if pump {
+        while process.isRunning {
+          RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.03))
+        }
+      } else {
+        process.waitUntilExit()
+      }
     } catch {
       return false
     }
@@ -107,58 +100,41 @@ enum CaptureService {
   }
 }
 
-enum RegionLocator {
-  static func origin(of needle: NSImage, in haystack: NSImage) -> CGPoint? {
-    guard let needleRep = bitmap(needle), let hayRep = bitmap(haystack),
-          let pixel = find(needleRep, in: hayRep)
-    else { return nil }
-    return CGPoint(
-      x: CGFloat(pixel.x) / CGFloat(hayRep.pixelsWide) * haystack.size.width,
-      y: CGFloat(pixel.y) / CGFloat(hayRep.pixelsHigh) * haystack.size.height
-    )
-  }
+/// Records the interactive `screencapture -i` drag in screen space so we can
+/// store last-region without a full-display snapshot + brute-force search.
+private final class DragRectTracker {
+  private var monitor: Any?
+  private var down: CGPoint?
+  private(set) var rect: CGRect?
 
-  private static func bitmap(_ image: NSImage) -> NSBitmapImageRep? {
-    guard let tiff = image.tiffRepresentation else { return nil }
-    return NSBitmapImageRep(data: tiff)
-  }
-
-  private static func find(_ needle: NSBitmapImageRep, in hay: NSBitmapImageRep) -> (x: Int, y: Int)? {
-    let nw = needle.pixelsWide
-    let nh = needle.pixelsHigh
-    let hw = hay.pixelsWide
-    let hh = hay.pixelsHigh
-    guard nw >= 8, nh >= 8, nw <= hw, nh <= hh else { return nil }
-
-    let samples = [
-      (2, 2), (nw / 2, 2), (nw - 3, 2),
-      (2, nh / 2), (nw / 2, nh / 2), (nw - 3, nh / 2),
-      (2, nh - 3), (nw / 2, nh - 3), (nw - 3, nh - 3),
-    ]
-    let colors = samples.map { needle.colorAt(x: $0.0, y: $0.1) }
-    let step = max(1, min(4, min(nw, nh) / 40))
-
-    for y in stride(from: 0, through: hh - nh, by: step) {
-      for x in stride(from: 0, through: hw - nw, by: step) {
-        var ok = true
-        for (index, sample) in samples.enumerated() {
-          if !close(hay.colorAt(x: x + sample.0, y: y + sample.1), colors[index]) {
-            ok = false
-            break
-          }
-        }
-        if ok { return (x, y) }
+  func start() {
+    down = nil
+    rect = nil
+    monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] event in
+      guard let self else { return }
+      let point = NSEvent.mouseLocation
+      if event.type == .leftMouseDown {
+        self.down = point
+        return
+      }
+      guard event.type == .leftMouseUp, let down = self.down else { return }
+      let r = CGRect(
+        x: min(down.x, point.x),
+        y: min(down.y, point.y),
+        width: abs(point.x - down.x),
+        height: abs(point.y - down.y)
+      )
+      if r.width >= 8, r.height >= 8 {
+        self.rect = r
       }
     }
-    return nil
   }
 
-  private static func close(_ a: NSColor?, _ b: NSColor?) -> Bool {
-    guard let a = a?.usingColorSpace(.sRGB), let b = b?.usingColorSpace(.sRGB) else { return false }
-    let dr = a.redComponent - b.redComponent
-    let dg = a.greenComponent - b.greenComponent
-    let db = a.blueComponent - b.blueComponent
-    return dr * dr + dg * dg + db * db < 0.0025
+  func stop() {
+    if let monitor {
+      NSEvent.removeMonitor(monitor)
+    }
+    monitor = nil
   }
 }
 
@@ -446,19 +422,35 @@ enum CompositeExporter {
 
 enum DiskExporter {
   @MainActor
-  static func savePNG(_ image: NSImage) {
+  static func savePNG(_ image: NSImage) -> Bool {
     let panel = NSSavePanel()
     panel.allowedContentTypes = [.png]
     panel.canCreateDirectories = true
     panel.isExtensionHidden = false
     panel.nameFieldStringValue = "annotated.png"
     panel.title = "Save annotated screenshot"
+
+    let host = NSApp.windows.first { $0 is AnnotatorWindow }
+
     NSApp.setActivationPolicy(.regular)
     NSApp.activate(ignoringOtherApps: true)
+    host?.makeKeyAndOrderFront(nil)
+
     let result = panel.runModal()
+
+    var wrote = false
+    if result == .OK, let url = panel.url, let data = ClipboardService.pngData(image) {
+      try? data.write(to: url)
+      wrote = true
+    }
+
     NSApp.setActivationPolicy(.accessory)
-    guard result == .OK, let url = panel.url else { return }
-    guard let data = ClipboardService.pngData(image) else { return }
-    try? data.write(to: url)
+    if let host {
+      host.hidesOnDeactivate = false
+      host.orderFrontRegardless()
+      host.makeKeyAndOrderFront(nil)
+    }
+    NSApp.activate(ignoringOtherApps: true)
+    return wrote
   }
 }

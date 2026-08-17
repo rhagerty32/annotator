@@ -1,6 +1,17 @@
 import AppKit
 import SwiftUI
 
+/// Plain window so AppKit will not auto-dismiss on Escape / save-panel Cancel
+/// the way `NSPanel` does (`cancelOperation` → `close`).
+final class AnnotatorWindow: NSWindow {
+  override var canBecomeKey: Bool { true }
+  override var canBecomeMain: Bool { true }
+
+  override func cancelOperation(_ sender: Any?) {
+    // Escape is handled in AppDelegate. Do not close the editor.
+  }
+}
+
 @main
 enum AnnotatorMain {
   static func main() {
@@ -18,9 +29,9 @@ private final class OCRResultBox: @unchecked Sendable {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private var state: AppState!
-  private var panel: NSPanel?
+  private var panel: AnnotatorWindow?
   private var keyMonitor: Any?
   private var flagMonitor: Any?
   private var keyUpMonitor: Any?
@@ -30,18 +41,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       Self.runOCRAndExit()
     }
 
-    let loaded = Self.loadLaunchImage()
-    state = AppState(image: loaded.image, imageURL: loaded.url)
-    installHotkeys()
-    showPanel()
+    // Return first so the run loop is spinning before `screencapture -i`
+    // (needed for last-region mouse tracking, and so the picker can appear).
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      let loaded = Self.loadLaunchImage()
+      self.state = AppState(image: loaded.image, imageURL: loaded.url)
+      self.installHotkeys()
+      self.showPanel()
+    }
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-    true
+    // A dismissed NSSavePanel must not quit the editor. Quit only via Esc, the
+    // close button, or Save / S (see windowShouldClose, cancelAndQuit, saveAndQuit).
+    false
+  }
+
+  func windowShouldClose(_ sender: NSWindow) -> Bool {
+    state.cancelAndQuit()
+    return false
   }
 
   private static func runOCRAndExit() -> Never {
-    guard let url = CaptureService.capture() else {
+    OCRService.warm()
+
+    guard let url = CaptureService.capture(locateRegion: false) else {
       exit(1)
     }
 
@@ -49,14 +74,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       try? FileManager.default.removeItem(at: url)
     }
 
+    let hud = OCRHUDController()
+    hud.present()
+    hud.flushAppearance()
+
     guard let image = NSImage(contentsOf: url) else {
+      hud.finishFailure()
+      RunLoop.current.run(until: Date(timeIntervalSinceNow: 1.05))
+      hud.dismiss()
       cleanup()
       exit(1)
     }
-
-    let hud = OCRHUDController()
-    hud.present()
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.03))
 
     let box = OCRResultBox()
     let group = DispatchGroup()
@@ -97,18 +125,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
     let bounds = screen?.frame ?? visible
 
-    let margin: CGFloat = 18
-    let winW = max(AnnotatorChrome.minWidth, visible.width - margin * 2)
-    let winH = max(AnnotatorChrome.minHeight, visible.height - margin * 2)
+    let size = AnnotatorChrome.windowSize(for: state.image.size, visible: visible)
 
     let frame = NSRect(
-      x: bounds.midX - winW / 2,
-      y: bounds.midY - winH / 2,
-      width: winW,
-      height: winH
+      x: bounds.midX - size.width / 2,
+      y: bounds.midY - size.height / 2,
+      width: size.width,
+      height: size.height
     )
 
-    let panel = NSPanel(
+    let panel = AnnotatorWindow(
       contentRect: frame,
       styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
       backing: .buffered,
@@ -117,14 +143,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     panel.title = "Annotator"
     panel.titleVisibility = .hidden
     panel.titlebarAppearsTransparent = true
-    panel.isFloatingPanel = true
-    panel.becomesKeyOnlyIfNeeded = false
     panel.hidesOnDeactivate = false
     panel.isMovableByWindowBackground = true
     panel.level = .floating
-    panel.collectionBehavior = [.fullScreenAuxiliary]
+    panel.collectionBehavior = [.fullScreenAuxiliary, .canJoinAllSpaces]
     panel.isReleasedWhenClosed = false
+    panel.animationBehavior = .none
     panel.minSize = NSSize(width: AnnotatorChrome.minWidth, height: AnnotatorChrome.minHeight)
+    panel.delegate = self
 
     let root = RootView(state: state)
     panel.contentView = NSHostingView(rootView: root)
@@ -155,6 +181,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   private func handleKey(_ event: NSEvent, state: AppState) -> NSEvent? {
+    if NSApp.modalWindow != nil { return event }
+    if let window = event.window, window !== panel { return event }
+
     let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
     let chars = event.charactersIgnoringModifiers?.lowercased()
 

@@ -1,6 +1,7 @@
 import {
   closeMainWindow,
   getPreferenceValues,
+  PopToRootType,
   showToast,
   Toast,
 } from "@raycast/api";
@@ -58,7 +59,10 @@ export async function runAnnotator(
     return null;
   }
 
-  await closeMainWindow({ clearRootSearch: true });
+  await closeMainWindow({
+    clearRootSearch: true,
+    popToRootType: PopToRootType.Immediate,
+  });
 
   if (!options.wait) {
     const child = spawn(binary, args, {

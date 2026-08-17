@@ -45,19 +45,22 @@ final class OCRHUDController: ObservableObject {
     panel.ignoresMouseEvents = true
     panel.isReleasedWhenClosed = false
     panel.appearance = NSAppearance(named: .darkAqua)
-    panel.animationBehavior = .utilityWindow
+    panel.animationBehavior = .none
     panel.contentView = host
 
     Self.center(panel, on: Self.screenUnderMouse(), size: OCRLoadingHUD.windowSize)
 
-    panel.alphaValue = 0
+    panel.alphaValue = 1
     panel.orderFrontRegardless()
-    NSAnimationContext.runAnimationGroup { context in
-      context.duration = 0.16
-      context.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
-      panel.animator().alphaValue = 1
-    }
+    panel.displayIfNeeded()
+    host.displayIfNeeded()
     self.panel = panel
+  }
+
+  func flushAppearance() {
+    panel?.displayIfNeeded()
+    panel?.contentView?.displayIfNeeded()
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.09))
   }
 
   func finishSuccess() {

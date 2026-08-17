@@ -2,11 +2,37 @@ import AppKit
 import Vision
 
 enum OCRService {
+  static func warm() {
+    DispatchQueue.global(qos: .userInitiated).async {
+      let width = 16
+      let bytes = [UInt8](repeating: 255, count: width * width * 4)
+      guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+            let cgImage = CGImage(
+              width: width,
+              height: width,
+              bitsPerComponent: 8,
+              bitsPerPixel: 32,
+              bytesPerRow: width * 4,
+              space: CGColorSpaceCreateDeviceRGB(),
+              bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+              provider: provider,
+              decode: nil,
+              shouldInterpolate: false,
+              intent: .defaultIntent
+            )
+      else { return }
+      let request = VNRecognizeTextRequest()
+      request.recognitionLevel = .fast
+      let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+      try? handler.perform([request])
+    }
+  }
+
   static func recognize(_ image: NSImage) -> String? {
     guard let cgImage = cgImage(from: image) else { return nil }
 
     let request = VNRecognizeTextRequest()
-    request.recognitionLevel = .accurate
+    request.recognitionLevel = .fast
     request.usesLanguageCorrection = true
 
     let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
