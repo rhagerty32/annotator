@@ -1,0 +1,12 @@
+{
+  "name": "annotator",
+  "private": true,
+  "scripts": {
+    "build:annotator": "bash scripts/build.sh",
+    "build:raycast": "npm --prefix raycast run build",
+    "dev": "npm --prefix raycast run dev",
+    "dev:raycast": "npm --prefix raycast run dev",
+    "reload": "bash ./reload-raycast.sh",
+    "annotate": ".build/release/Annotator --capture"
+  }
+}

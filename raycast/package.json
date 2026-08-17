@@ -1,0 +1,77 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "screenshot-annotator",
+  "title": "Screenshot Annotator",
+  "description": "Capture a screen region, annotate with hotkeys, copy to clipboard.",
+  "icon": "icon.png",
+  "author": "ryan",
+  "categories": ["Productivity"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "annotate",
+      "title": "Annotate Screenshot",
+      "description": "Capture a region, annotate with hotkeys, copy to clipboard.",
+      "mode": "no-view"
+    },
+    {
+      "name": "copy-text",
+      "title": "Copy Text from Screen",
+      "description": "Capture a region, OCR it, copy the text to the clipboard.",
+      "mode": "no-view"
+    },
+    {
+      "name": "annotate-window",
+      "title": "Annotate Window",
+      "description": "Capture a window, then annotate.",
+      "mode": "no-view"
+    },
+    {
+      "name": "annotate-clipboard",
+      "title": "Annotate Clipboard",
+      "description": "Open the image already on the clipboard in Annotator.",
+      "mode": "no-view"
+    },
+    {
+      "name": "annotate-delayed",
+      "title": "Annotate in 3s",
+      "description": "Wait 3 seconds, then capture a region — for menus that disappear.",
+      "mode": "no-view"
+    },
+    {
+      "name": "annotate-fullscreen",
+      "title": "Annotate Full Screen",
+      "description": "Capture the display under the cursor, then annotate.",
+      "mode": "no-view"
+    },
+    {
+      "name": "annotate-last-region",
+      "title": "Annotate Last Region",
+      "description": "Recapture the last region without the crosshair, then annotate.",
+      "mode": "no-view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "annotatorPath",
+      "title": "Annotator binary",
+      "description": "Absolute path to the Annotator executable (swift build -c release).",
+      "type": "textfield",
+      "required": false,
+      "default": "",
+      "placeholder": "/Users/you/…/annotator/.build/release/Annotator"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.94.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  },
+  "scripts": {
+    "dev": "ray develop",
+    "build": "ray build -e dist -o dist && cp dist/*.js dist/*.js.map .",
+    "lint": "ray lint"
+  }
+}

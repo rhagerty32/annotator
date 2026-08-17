@@ -1,0 +1,9 @@
+.DS_Store
+.build/
+.swiftpm/
+Package.resolved
+raycast/node_modules/
+raycast/dist/
+raycast/raycast-env.d.ts
+*.xcodeproj/
+xcuserdata/
