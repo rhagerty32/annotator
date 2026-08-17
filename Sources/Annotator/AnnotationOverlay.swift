@@ -62,7 +62,6 @@ struct AnnotationOverlay: View {
     case let .highlight(rect):
       let r = rect.normalized
       context.fill(Path(r), with: .color(color.opacity(0.38)))
-      context.stroke(Path(r), with: .color(color.opacity(0.7)), lineWidth: max(1, stroke * 0.4))
     case .spotlight:
       break
     case let .redact(rect):
@@ -82,16 +81,6 @@ struct AnnotationOverlay: View {
       strokeHalo(path, color: color, width: stroke, in: &context, cap: .round, join: .round)
     case let .text(origin, string):
       let font = Font.system(size: max(14, stroke * 7), weight: .semibold)
-      let halo = context.resolve(Text(string).font(font).foregroundStyle(.white))
-      for dx in [-1.0, 0.0, 1.0] {
-        for dy in [-1.0, 0.0, 1.0] where dx != 0 || dy != 0 {
-          context.draw(
-            halo,
-            at: CGPoint(x: origin.x + dx, y: origin.y + dy),
-            anchor: .topLeading
-          )
-        }
-      }
       let ink = context.resolve(Text(string).font(font).foregroundStyle(color))
       context.draw(ink, at: origin, anchor: .topLeading)
     case let .badge(origin, index):
@@ -147,7 +136,6 @@ struct AnnotationOverlay: View {
           drawCropDraft(rect, canvasSize: canvasSize, in: &context)
         } else if tool == .highlight {
           context.fill(Path(rect), with: .color(color.opacity(0.28)))
-          context.stroke(Path(rect), with: .color(color), lineWidth: max(1, stroke * 0.4))
         } else if tool == .spotlight {
           var dim = Path()
           dim.addRect(CGRect(origin: .zero, size: canvasSize))
@@ -221,7 +209,6 @@ struct AnnotationOverlay: View {
     let radius = max(12, stroke * 5)
     let rect = CGRect(x: origin.x - radius, y: origin.y - radius, width: radius * 2, height: radius * 2)
     let circle = Path(ellipseIn: rect)
-    context.fill(Path(ellipseIn: rect.insetBy(dx: -2, dy: -2)), with: .color(.white.opacity(0.95)))
     context.fill(circle, with: .color(color))
     let label = context.resolve(
       Text("\(index)")
@@ -267,11 +254,6 @@ struct AnnotationOverlay: View {
     cap: CGLineCap = .round,
     join: CGLineJoin = .round
   ) {
-    context.stroke(
-      path,
-      with: .color(Color.white.opacity(0.92)),
-      style: StrokeStyle(lineWidth: width + 2.5, lineCap: cap, lineJoin: join)
-    )
     context.stroke(
       path,
       with: .color(color),
