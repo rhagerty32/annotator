@@ -3,12 +3,15 @@ import SwiftUI
 
 @MainActor
 final class AppState: ObservableObject {
-  @Published var image: NSImage
+  @Published var image: NSImage {
+    didSet { cgImage = ShotLoader.cgImage(from: image) }
+  }
+  /// Full-resolution bitmap for the canvas. Kept in sync with `image`.
+  private(set) var cgImage: CGImage?
   @Published var annotations: [Annotation] = []
   @Published var tool: Tool = .rectangle
   @Published var activeColor: AnnotationColor = .red
   @Published var strokeWidth: CGFloat
-  @Published var arrowHeaded = true
   @Published var draft: Draft?
   @Published var isTyping = false
   @Published var textDraft = ""
@@ -16,6 +19,7 @@ final class AppState: ObservableObject {
   @Published var selectedID: UUID?
   @Published var editingID: UUID?
   @Published var showHelp = false
+  @Published var showToolPalette = false
   @Published var showSettings = false
   @Published var stage: CanvasStage {
     didSet { UserDefaults.standard.set(stage.rawValue, forKey: Self.stageDefaultsKey) }
@@ -23,7 +27,7 @@ final class AppState: ObservableObject {
   @Published var zoom: CGFloat = 1
   @Published var pan: CGSize = .zero
   @Published var spaceHeld = false
-  @Published var statusMessage = "V R C A D T · H N B X · 1–0 · [ ] stroke · S save"
+  @Published var statusMessage = "Hold space for tools · ? shortcuts · S save"
 
   let imageURL: URL?
   private(set) var dragSession: DragSession?
@@ -38,10 +42,12 @@ final class AppState: ObservableObject {
   private var redoStack: [HistoryFrame] = []
   private var didPushForGesture = false
   private var lastPointer: CGPoint?
+  private var spacePaletteHeld = false
 
-  init(image: NSImage, imageURL: URL? = nil) {
+  init(image: NSImage, imageURL: URL? = nil, cgImage: CGImage? = nil) {
     self.image = image
     self.imageURL = imageURL
+    self.cgImage = cgImage ?? ShotLoader.cgImage(from: image)
     self.strokeWidth = max(2.5, image.size.width * 0.0025)
     let stored = UserDefaults.standard.string(forKey: Self.stageDefaultsKey) ?? ""
     self.stage = CanvasStage(rawValue: stored) ?? .void
@@ -161,21 +167,6 @@ final class AppState: ObservableObject {
     statusMessage = "Sent back"
   }
 
-  func toggleArrowHead() {
-    guard !isTyping else { return }
-    if let selectedID,
-       let index = annotations.firstIndex(where: { $0.id == selectedID }),
-       case let .arrow(start, end, control, headed) = annotations[index].kind
-    {
-      pushHistory()
-      annotations[index].kind = .arrow(start: start, end: end, control: control, headed: !headed)
-      statusMessage = headed ? "Line" : "Arrowhead on"
-      return
-    }
-    arrowHeaded.toggle()
-    statusMessage = arrowHeaded ? "Arrows with heads" : "Lines (no head) · L toggles"
-  }
-
   func sampleColor(at point: CGPoint) {
     guard let swatch = ImageSampler.swatch(in: image, at: point) else { return }
     activeColor = swatch
@@ -210,12 +201,17 @@ final class AppState: ObservableObject {
     }
 
     if let selected = selectedAnnotation {
-      if tool == .arrow, case .arrow = selected.kind,
+      if tool.drawsLine, case .arrow = selected.kind,
          grabSelected(selected, at: point, handleHitTolerance: handleHitTolerance, allowMove: true)
       {
         return
       }
       if tool == .rectangle, case .rectangle = selected.kind,
+         grabSelected(selected, at: point, handleHitTolerance: handleHitTolerance, allowMove: false)
+      {
+        return
+      }
+      if tool == .cross, case .cross = selected.kind,
          grabSelected(selected, at: point, handleHitTolerance: handleHitTolerance, allowMove: false)
       {
         return
@@ -229,7 +225,7 @@ final class AppState: ObservableObject {
 
     selectedID = nil
     switch tool {
-    case .rectangle, .circle, .arrow, .highlight, .spotlight, .redact, .crop:
+    case .rectangle, .circle, .arrow, .line, .cross, .highlight, .spotlight, .redact, .crop:
       draft = .shape(start: point, current: point)
       dragSession = .draw
     case .draw:
@@ -377,6 +373,7 @@ final class AppState: ObservableObject {
   func toggleHelp() {
     commitTextIfNeeded(cancel: true)
     showSettings = false
+    hideToolPalette()
     showHelp.toggle()
     if showHelp {
       draft = nil
@@ -390,11 +387,48 @@ final class AppState: ObservableObject {
 
   func toggleSettings() {
     showHelp = false
+    hideToolPalette()
     showSettings.toggle()
+  }
+
+  func pressSpacePalette() {
+    if spacePaletteHeld { return }
+    spacePaletteHeld = true
+    guard !isTyping else { return }
+    commitTextIfNeeded(cancel: true)
+    showHelp = false
+    showSettings = false
+    showToolPalette = true
+    draft = nil
+    dragSession = nil
+    didPushForGesture = false
+    statusMessage = "Hold space · press a letter · release to close"
+  }
+
+  func releaseSpacePalette() {
+    spacePaletteHeld = false
+    hideToolPalette()
+  }
+
+  func pickToolFromPalette(_ tool: Tool) {
+    selectTool(tool)
+    hideToolPalette()
+  }
+
+  func hideToolPalette() {
+    guard showToolPalette else { return }
+    showToolPalette = false
+    if !isTyping {
+      statusMessage = status(for: tool)
+    }
   }
 
   /// Returns true if Esc was handled without quitting.
   func handleEscape() -> Bool {
+    if showToolPalette {
+      hideToolPalette()
+      return true
+    }
     if showHelp {
       showHelp = false
       statusMessage = status(for: tool)
@@ -638,8 +672,10 @@ final class AppState: ObservableObject {
 
   private func selectedStatus(_ annotation: Annotation) -> String {
     switch annotation.kind {
-    case .arrow:
-      return "Arrow · drag the middle to curve · L toggles the head"
+    case let .arrow(_, _, _, headed):
+      return headed
+        ? "Arrow · drag the middle to curve"
+        : "Line · drag the middle to curve"
     case .rectangle:
       return "Rectangle · drag the top-edge dot to round"
     case .spotlight:
@@ -649,12 +685,16 @@ final class AppState: ObservableObject {
     }
   }
 
+  private func headedForNewLine(option: Bool) -> Bool {
+    tool == .line ? option : !option
+  }
+
   private func reportDraftSize(start: CGPoint, current: CGPoint) {
     let mods = PointerMods.current
-    if tool == .arrow {
+    if tool.drawsLine {
       let snapped = snapArrow(from: start, to: current, constrain: mods.shift)
       let len = hypot(snapped.1.x - snapped.0.x, snapped.1.y - snapped.0.y)
-      let kind = (mods.option || !arrowHeaded) ? "Line" : "Arrow"
+      let kind = headedForNewLine(option: mods.option) ? "Arrow" : "Line"
       statusMessage = String(format: "%@ %.0f px", kind, len)
       return
     }
@@ -670,8 +710,8 @@ final class AppState: ObservableObject {
       return
     }
     switch annotation.kind {
-    case let .rectangle(rect, _), let .circle(rect), let .highlight(rect), let .spotlight(rect),
-         let .redact(rect):
+    case let .rectangle(rect, _), let .circle(rect), let .cross(rect), let .highlight(rect),
+         let .spotlight(rect), let .redact(rect):
       let r = rect.normalized
       statusMessage = String(format: "%.0f × %.0f", r.width, r.height)
     default:
@@ -722,7 +762,7 @@ final class AppState: ObservableObject {
         return annotation.id
       }
       switch annotation.kind {
-      case .text, .path, .badge, .highlight, .spotlight, .redact:
+      case .text, .path, .badge, .highlight, .spotlight, .redact, .cross:
         if annotation.boundingRect.contains(point) { return annotation.id }
       case .rectangle, .circle:
         if annotation.boundingRect.contains(point) { return annotation.id }
@@ -743,35 +783,44 @@ final class AppState: ObservableObject {
     switch draft {
     case let .shape(start, _):
       switch tool {
-      case .arrow:
+      case .arrow, .line:
         let snapped = snapArrow(from: start, to: point, constrain: mods.shift)
         if hypot(snapped.1.x - snapped.0.x, snapped.1.y - snapped.0.y) > 4 {
           pushHistory()
+          let headed = headedForNewLine(option: mods.option)
           let annotation = Annotation(
             kind: .arrow(
               start: snapped.0,
               end: snapped.1,
               control: nil,
-              headed: mods.option ? false : arrowHeaded
+              headed: headed
             ),
             color: activeColor,
             strokeWidth: strokeWidth
           )
           annotations.append(annotation)
           selectedID = annotation.id
-          if case let .arrow(_, _, _, headed) = annotation.kind, !headed {
-            statusMessage = "Line · L adds an arrowhead"
-          } else {
-            statusMessage = "Arrow · drag the middle to curve · L drops the head"
-          }
+          statusMessage = headed
+            ? "Arrow · drag the middle to curve"
+            : "Line · drag the middle to curve"
         }
-      case .rectangle, .circle, .highlight, .spotlight, .redact:
-        let rect = shapeRect(from: start, to: point, mods: mods)
+      case .rectangle, .circle, .highlight, .spotlight, .redact, .cross:
+        var rect = shapeRect(from: start, to: point, mods: mods)
+        if tool == .cross, rect.width < 8, rect.height < 8 {
+          let size: CGFloat = 28
+          rect = CGRect(
+            x: start.x - size / 2,
+            y: start.y - size / 2,
+            width: size,
+            height: size
+          )
+        }
         if rect.width > 2, rect.height > 2 {
           pushHistory()
           let kind: Annotation.Kind
           switch tool {
           case .circle: kind = .circle(rect)
+          case .cross: kind = .cross(rect)
           case .highlight: kind = .highlight(rect)
           case .spotlight: kind = .spotlight(rect)
           case .redact: kind = .redact(rect)
@@ -841,8 +890,12 @@ final class AppState: ObservableObject {
       return "Redact · drag to pixelate"
     case .crop:
       return "Crop · drag a region · ⇧ square"
+    case .cross:
+      return "Cross · drag an X · click for a small one · ⇧ square"
     case .arrow:
       return "Arrow · ⇧ 45° · ⌥ line · drag the middle to curve"
+    case .line:
+      return "Line · ⇧ 45° · ⌥ arrow · drag the middle to curve"
     case .rectangle, .circle:
       return "\(tool.label) · ⇧ constrain · ⌥ from center"
     default:

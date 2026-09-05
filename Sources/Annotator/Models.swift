@@ -8,7 +8,9 @@ enum Tool: String, CaseIterable, Identifiable {
   case rectangle
   case circle
   case arrow
+  case line
   case draw
+  case cross
   case text
   case highlight
   case spotlight
@@ -24,13 +26,15 @@ enum Tool: String, CaseIterable, Identifiable {
     case .rectangle: return "r"
     case .circle: return "c"
     case .arrow: return "a"
+    case .line: return "l"
     case .draw: return "d"
+    case .cross: return "x"
     case .text: return "t"
     case .highlight: return "h"
     case .spotlight: return "i"
     case .numbered: return "n"
     case .redact: return "b"
-    case .crop: return "x"
+    case .crop: return "k"
     }
   }
 
@@ -40,7 +44,9 @@ enum Tool: String, CaseIterable, Identifiable {
     case .rectangle: return "Rectangle"
     case .circle: return "Circle"
     case .arrow: return "Arrow"
+    case .line: return "Line"
     case .draw: return "Draw"
+    case .cross: return "Cross"
     case .text: return "Text"
     case .highlight: return "Fill"
     case .spotlight: return "Spotlight"
@@ -50,18 +56,68 @@ enum Tool: String, CaseIterable, Identifiable {
     }
   }
 
+  var symbolName: String {
+    switch self {
+    case .select: return "cursorarrow"
+    case .rectangle: return "rectangle"
+    case .circle: return "circle"
+    case .arrow: return "arrow.up.right"
+    case .line: return "line.diagonal"
+    case .draw: return "scribble.variable"
+    case .cross: return "xmark"
+    case .text: return "textformat"
+    case .highlight: return "paintbrush.pointed.fill"
+    case .spotlight: return "viewfinder"
+    case .numbered: return "list.number"
+    case .redact: return "eye.slash"
+    case .crop: return "crop"
+    }
+  }
+
   var placesOnClick: Bool {
     self == .text || self == .numbered
   }
 
+  var drawsLine: Bool {
+    self == .arrow || self == .line
+  }
+
   var drawsShape: Bool {
     switch self {
-    case .rectangle, .circle, .arrow, .highlight, .spotlight, .redact, .crop:
+    case .rectangle, .circle, .arrow, .line, .cross, .highlight, .spotlight, .redact, .crop:
       return true
     default:
       return false
     }
   }
+
+  init?(hotkey: Character) {
+    let key = String(hotkey).lowercased()
+    guard let match = Self.allCases.first(where: { $0.hotkey == key }) else { return nil }
+    self = match
+  }
+}
+
+struct ToolPaletteGroup: Identifiable {
+  let id: String
+  let title: String
+  let tools: [Tool]
+
+  static let toolbar: [ToolPaletteGroup] = [
+    ToolPaletteGroup(id: "shapes", title: "Shapes", tools: [
+      .rectangle, .circle, .arrow, .line, .draw, .cross,
+    ]),
+    ToolPaletteGroup(id: "callouts", title: "Callouts", tools: [
+      .text, .highlight, .spotlight, .numbered,
+    ]),
+    ToolPaletteGroup(id: "cut", title: "Cut", tools: [
+      .redact, .crop,
+    ]),
+  ]
+
+  static let overlay: [ToolPaletteGroup] = [
+    ToolPaletteGroup(id: "select", title: "Select", tools: [.select]),
+  ] + toolbar
 }
 
 enum AnnotationColor: String, CaseIterable, Identifiable, Equatable {
@@ -125,6 +181,7 @@ struct Annotation: Identifiable, Equatable {
   enum Kind: Equatable {
     case rectangle(CGRect, radius: CGFloat)
     case circle(CGRect)
+    case cross(CGRect)
     case highlight(CGRect)
     case spotlight(CGRect)
     case redact(CGRect)
@@ -161,8 +218,8 @@ struct Annotation: Identifiable, Equatable {
 
   var boundingRect: CGRect {
     switch kind {
-    case let .rectangle(rect, _), let .circle(rect), let .highlight(rect), let .spotlight(rect),
-         let .redact(rect):
+    case let .rectangle(rect, _), let .circle(rect), let .cross(rect), let .highlight(rect),
+         let .spotlight(rect), let .redact(rect):
       return rect.normalized
     case let .arrow(start, end, control, _):
       let c = control ?? midpoint(start, end)
@@ -208,6 +265,13 @@ struct Annotation: Identifiable, Equatable {
       let outer = 1 + tolerance / max(rx, ry)
       let inner = max(0, 1 - tolerance / max(rx, ry))
       return d <= outer * outer && d >= inner * inner
+    case let .cross(rect):
+      let r = rect.normalized
+      let a = CGPoint(x: r.minX, y: r.minY)
+      let b = CGPoint(x: r.maxX, y: r.maxY)
+      let c = CGPoint(x: r.maxX, y: r.minY)
+      let d = CGPoint(x: r.minX, y: r.maxY)
+      return min(distanceToSegment(point, a, b), distanceToSegment(point, c, d)) <= tolerance + 2
     case let .highlight(rect), let .spotlight(rect), let .redact(rect):
       return rect.normalized.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
     case let .arrow(start, end, control, _):
@@ -238,6 +302,8 @@ struct Annotation: Identifiable, Equatable {
       return copying(kind: .rectangle(rect.offsetBy(dx: delta.x, dy: delta.y), radius: radius))
     case let .circle(rect):
       return copying(kind: .circle(rect.offsetBy(dx: delta.x, dy: delta.y)))
+    case let .cross(rect):
+      return copying(kind: .cross(rect.offsetBy(dx: delta.x, dy: delta.y)))
     case let .highlight(rect):
       return copying(kind: .highlight(rect.offsetBy(dx: delta.x, dy: delta.y)))
     case let .spotlight(rect):
@@ -281,6 +347,8 @@ struct Annotation: Identifiable, Equatable {
       return copying(kind: .rectangle(resized, radius: clamped))
     case let .circle(rect):
       return copying(kind: .circle(resize(rect.normalized, handle: handle, to: point)))
+    case let .cross(rect):
+      return copying(kind: .cross(resize(rect.normalized, handle: handle, to: point)))
     case let .highlight(rect):
       return copying(kind: .highlight(resize(rect.normalized, handle: handle, to: point)))
     case let .spotlight(rect):
@@ -310,7 +378,7 @@ struct Annotation: Identifiable, Equatable {
     switch kind {
     case .rectangle:
       return [.topLeft, .topRight, .bottomLeft, .bottomRight, .rectRadius]
-    case .circle, .highlight, .spotlight, .redact:
+    case .circle, .cross, .highlight, .spotlight, .redact:
       return [.topLeft, .topRight, .bottomLeft, .bottomRight]
     case .arrow:
       return [.arrowStart, .arrowEnd, .arrowCurve]
@@ -333,7 +401,8 @@ struct Annotation: Identifiable, Equatable {
         return CGPoint(x: r.minX + inset, y: r.minY)
       default: return nil
       }
-    case let .circle(rect), let .highlight(rect), let .spotlight(rect), let .redact(rect):
+    case let .circle(rect), let .cross(rect), let .highlight(rect), let .spotlight(rect),
+         let .redact(rect):
       let r = rect.normalized
       switch handle {
       case .topLeft: return CGPoint(x: r.minX, y: r.minY)
@@ -429,6 +498,16 @@ func snapArrow(from start: CGPoint, to current: CGPoint, constrain: Bool) -> (CG
   let snapped = (angle / (.pi / 4)).rounded() * (.pi / 4)
   let end = CGPoint(x: start.x + dist * cos(snapped), y: start.y + dist * sin(snapped))
   return (start, end)
+}
+
+func crossPath(_ rect: CGRect) -> Path {
+  let r = rect.normalized
+  var path = Path()
+  path.move(to: CGPoint(x: r.minX, y: r.minY))
+  path.addLine(to: CGPoint(x: r.maxX, y: r.maxY))
+  path.move(to: CGPoint(x: r.maxX, y: r.minY))
+  path.addLine(to: CGPoint(x: r.minX, y: r.maxY))
+  return path
 }
 
 func roundedRectPath(_ rect: CGRect, radius: CGFloat) -> Path {
@@ -537,7 +616,7 @@ struct CanvasTransform {
     guard imageSize.width > 0, imageSize.height > 0 else {
       return CGRect(origin: .zero, size: container)
     }
-    let pad = AnnotatorChrome.canvasPadding / 2
+    let pad = AnnotatorChrome.canvasInset
     let avail = CGSize(
       width: max(1, container.width - pad * 2),
       height: max(1, container.height - pad * 2)
@@ -603,5 +682,20 @@ struct CanvasTransform {
     let panY = canvasPoint.y - fitted.midY
       - fitted.height * zoom * (imagePoint.y / imageSize.height - 0.5)
     return CGSize(width: panX, height: panY)
+  }
+}
+
+extension NSImage {
+  var fullCGImage: CGImage? {
+    if let rep = representations
+      .compactMap({ $0 as? NSBitmapImageRep })
+      .max(by: { $0.pixelsWide < $1.pixelsWide })
+    {
+      return rep.cgImage
+    }
+    guard let tiff = tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else {
+      return nil
+    }
+    return rep.cgImage
   }
 }

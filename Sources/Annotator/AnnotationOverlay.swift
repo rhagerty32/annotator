@@ -59,6 +59,8 @@ struct AnnotationOverlay: View {
       strokeHalo(roundedRectPath(rect, radius: radius), color: color, width: stroke, in: &context)
     case let .circle(rect):
       strokeHalo(Path(ellipseIn: rect.normalized), color: color, width: stroke, in: &context)
+    case let .cross(rect):
+      strokeHalo(crossPath(rect), color: color, width: stroke, in: &context)
     case let .highlight(rect):
       let r = rect.normalized
       context.fill(Path(r), with: .color(color.opacity(0.38)))
@@ -119,13 +121,13 @@ struct AnnotationOverlay: View {
     let stroke = draftWidth
     switch draft {
     case let .shape(start, current):
-      if tool == .arrow {
+      if tool.drawsLine {
         let snapped = snapArrow(from: start, to: current, constrain: mods.shift)
         strokeArrow(
           from: snapped.0,
           to: snapped.1,
           control: nil,
-          headed: !mods.option,
+          headed: tool == .line ? mods.option : !mods.option,
           width: stroke,
           in: &context,
           color: color
@@ -155,6 +157,8 @@ struct AnnotationOverlay: View {
           )
         } else if tool == .circle {
           strokeHalo(Path(ellipseIn: rect), color: color, width: stroke, in: &context)
+        } else if tool == .cross {
+          strokeHalo(crossPath(rect), color: color, width: stroke, in: &context)
         } else {
           strokeHalo(Path(rect), color: color, width: stroke, in: &context)
         }

@@ -1,7 +1,62 @@
 import AppKit
 import CoreImage
+import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
+
+/// Decode a capture at native pixels. `NSImage(contentsOf:)` / `NSBitmapImageRep.cgImage`
+/// can yield a 1× crop of a Retina PNG, which is what made the editor look chopped off.
+enum ShotLoader {
+  struct Loaded {
+    let image: NSImage
+    let cgImage: CGImage
+    let url: URL?
+  }
+
+  static func load(url: URL) -> Loaded? {
+    guard let cg = cgImage(from: url) else { return nil }
+    return wrap(cg, url: url)
+  }
+
+  static func load(nsImage: NSImage) -> Loaded? {
+    guard let cg = cgImage(from: nsImage) else { return nil }
+    return wrap(cg, url: nil)
+  }
+
+  static func cgImage(from url: URL) -> CGImage? {
+    let options = [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, options) else { return nil }
+    return CGImageSourceCreateImageAtIndex(source, 0, options)
+  }
+
+  static func cgImage(from image: NSImage) -> CGImage? {
+    if let tiff = image.tiffRepresentation {
+      let options = [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
+      if let source = CGImageSourceCreateWithData(tiff as CFData, options),
+         let cg = CGImageSourceCreateImageAtIndex(source, 0, options)
+      {
+        return cg
+      }
+    }
+    return image.fullCGImage
+  }
+
+  private static func wrap(_ cg: CGImage, url: URL?) -> Loaded {
+    let scale = screenScale()
+    let points = NSSize(
+      width: CGFloat(cg.width) / scale,
+      height: CGFloat(cg.height) / scale
+    )
+    return Loaded(image: NSImage(cgImage: cg, size: points), cgImage: cg, url: url)
+  }
+
+  static func screenScale() -> CGFloat {
+    let mouse = NSEvent.mouseLocation
+    return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }?.backingScaleFactor
+      ?? NSScreen.main?.backingScaleFactor
+      ?? 2
+  }
+}
 
 enum CaptureService {
   private static let lastRectKey = "annotator.lastCaptureRect"

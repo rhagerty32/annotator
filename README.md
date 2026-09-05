@@ -78,12 +78,13 @@ npm run annotate                          # region, then editor
 
 ## Annotating
 
-Press **?** in the panel for the full cheat sheet.
+Press **?** in the panel for the full cheat sheet. Hold **space** to see every tool, then tap its letter. Space types normally while a text field is active.
 
 | | |
 |---|---|
-| **V R C A D T** | Select, rectangle, circle, arrow, draw, text |
-| **H I N B X** | Fill, spotlight, numbered steps, redact, crop |
+| **Space** | Hold: tool palette · tap a letter to pick |
+| **V R C A L D X T** | Select, rectangle, circle, arrow, line, draw, cross, text |
+| **H I N B K** | Fill, spotlight, numbered steps, redact, crop |
 | **1–0** | Colors |
 | **[ ]** | Stroke |
 | **⇧** | Constrain (square / 45°) |

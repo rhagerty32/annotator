@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import Vision
 
 enum OCRService {
@@ -21,18 +22,18 @@ enum OCRService {
               intent: .defaultIntent
             )
       else { return }
-      let request = VNRecognizeTextRequest()
-      request.recognitionLevel = .fast
-      let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-      try? handler.perform([request])
+      _ = recognize(cgImage)
     }
   }
 
-  static func recognize(_ image: NSImage) -> String? {
-    guard let cgImage = cgImage(from: image) else { return nil }
+  static func recognize(contentsOf url: URL) -> String? {
+    guard let cgImage = cgImage(contentsOf: url) else { return nil }
+    return recognize(cgImage)
+  }
 
+  private static func recognize(_ cgImage: CGImage) -> String? {
     let request = VNRecognizeTextRequest()
-    request.recognitionLevel = .fast
+    request.recognitionLevel = .accurate
     request.usesLanguageCorrection = true
 
     let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
@@ -47,10 +48,20 @@ enum OCRService {
     return text.isEmpty ? nil : text
   }
 
-  private static func cgImage(from image: NSImage) -> CGImage? {
-    var rect = CGRect(origin: .zero, size: image.size)
-    if let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) {
+  /// Decode the PNG at native pixel size. `NSImage.cgImage(forProposedRect:)` can
+  /// downsample Retina captures to point size, which is what made OCR garbage.
+  private static func cgImage(contentsOf url: URL) -> CGImage? {
+    let options = [kCGImageSourceShouldCache: true] as CFDictionary
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, options) else { return nil }
+    if let cgImage = CGImageSourceCreateImageAtIndex(source, 0, options) {
       return cgImage
+    }
+    guard let image = NSImage(contentsOf: url) else { return nil }
+    if let rep = image.representations
+      .compactMap({ $0 as? NSBitmapImageRep })
+      .max(by: { $0.pixelsWide < $1.pixelsWide })
+    {
+      return rep.cgImage
     }
     guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else {
       return nil
@@ -65,8 +76,11 @@ enum OCRService {
     }
 
     let items: [Item] = observations.compactMap { observation in
-      guard let text = observation.topCandidates(1).first?.string, !text.isEmpty else { return nil }
-      return Item(text: text, box: observation.boundingBox)
+      guard let candidate = observation.topCandidates(1).first,
+            candidate.confidence >= 0.25,
+            !candidate.string.isEmpty
+      else { return nil }
+      return Item(text: candidate.string, box: observation.boundingBox)
     }
     guard !items.isEmpty else { return "" }
 

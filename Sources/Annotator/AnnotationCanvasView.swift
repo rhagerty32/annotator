@@ -22,21 +22,25 @@ struct AnnotationCanvasView: View {
       ZStack(alignment: .topLeading) {
         CanvasStageBackground(stage: state.stage, canvasSize: geo.size)
 
-        Image(nsImage: state.image)
-          .resizable()
-          .interpolation(.high)
-          .frame(width: displayed.width, height: displayed.height)
-          .overlay {
-            Rectangle()
-              .strokeBorder(shotStroke(for: state.stage), lineWidth: 1)
+        Canvas { context, _ in
+          if let cgImage = state.cgImage {
+            context.draw(Image(decorative: cgImage, scale: 1), in: displayed)
           }
+        }
+        .frame(width: geo.size.width, height: geo.size.height)
+        .allowsHitTesting(false)
+
+        Rectangle()
+          .strokeBorder(shotStroke(for: state.stage), lineWidth: 1)
+          .frame(width: displayed.width, height: displayed.height)
+          .position(x: displayed.midX, y: displayed.midY)
           .shadow(
             color: state.stage == .checker ? .black.opacity(0.55) : .clear,
             radius: state.stage == .checker ? 22 : 0,
             x: 0,
             y: state.stage == .checker ? 10 : 0
           )
-          .position(x: displayed.midX, y: displayed.midY)
+          .allowsHitTesting(false)
 
         AnnotationOverlay(
           annotations: scaledAnnotations(
@@ -74,6 +78,7 @@ struct AnnotationCanvasView: View {
         }
       }
       .frame(width: geo.size.width, height: geo.size.height)
+      .clipped()
       .contentShape(Rectangle())
       .onContinuousHover { phase in
         switch phase {
@@ -187,7 +192,7 @@ struct AnnotationCanvasView: View {
   private func installInputMonitor() {
     removeInputMonitor()
     inputMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .magnify]) { event in
-      guard !state.isTyping, !state.showHelp else { return event }
+      guard !state.isTyping, !state.showHelp, !state.showToolPalette else { return event }
       guard state.cursorInsideCanvas, state.canvasSize.width > 1 else { return event }
 
       if event.type == .magnify {
@@ -255,6 +260,8 @@ struct AnnotationCanvasView: View {
       )
     case let .circle(rect):
       return .circle(scale(rect: rect.normalized, from: imageSize, to: viewSize))
+    case let .cross(rect):
+      return .cross(scale(rect: rect.normalized, from: imageSize, to: viewSize))
     case let .highlight(rect):
       return .highlight(scale(rect: rect.normalized, from: imageSize, to: viewSize))
     case let .spotlight(rect):

@@ -46,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       let loaded = Self.loadLaunchImage()
-      self.state = AppState(image: loaded.image, imageURL: loaded.url)
+      self.state = AppState(image: loaded.image, imageURL: loaded.url, cgImage: loaded.cgImage)
       self.installHotkeys()
       self.showPanel()
     }
@@ -78,19 +78,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     hud.present()
     hud.flushAppearance()
 
-    guard let image = NSImage(contentsOf: url) else {
-      hud.finishFailure()
-      RunLoop.current.run(until: Date(timeIntervalSinceNow: 1.05))
-      hud.dismiss()
-      cleanup()
-      exit(1)
-    }
-
     let box = OCRResultBox()
     let group = DispatchGroup()
     group.enter()
     DispatchQueue.global(qos: .userInitiated).async {
-      box.text = OCRService.recognize(image)
+      box.text = OCRService.recognize(contentsOf: url)
       group.leave()
     }
 
@@ -123,19 +115,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       ?? NSScreen.main
       ?? NSScreen.screens.first
     let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
-    let bounds = screen?.frame ?? visible
 
     let size = AnnotatorChrome.windowSize(for: state.image.size, visible: visible)
 
-    let frame = NSRect(
-      x: bounds.midX - size.width / 2,
-      y: bounds.midY - size.height / 2,
-      width: size.width,
-      height: size.height
-    )
-
     let panel = AnnotatorWindow(
-      contentRect: frame,
+      contentRect: NSRect(origin: .zero, size: size),
       styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
       backing: .buffered,
       defer: false
@@ -153,11 +137,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     panel.delegate = self
 
     let root = RootView(state: state)
-    panel.contentView = NSHostingView(rootView: root)
+    let host = NSHostingView(rootView: root)
+    host.sizingOptions = []
+    host.clipsToBounds = true
+    host.autoresizingMask = [.width, .height]
+    panel.contentView = host
 
     self.panel = panel
 
-    panel.setFrame(frame, display: true)
+    panel.setContentSize(size)
+    let frame = panel.frame
+    panel.setFrameOrigin(NSPoint(
+      x: visible.midX - frame.width / 2,
+      y: visible.midY - frame.height / 2
+    ))
     panel.orderFrontRegardless()
     panel.makeKey()
     NSApp.activate(ignoringOtherApps: true)
@@ -175,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
       if event.keyCode == 49 {
         self?.state.spaceHeld = false
+        self?.state.releaseSpacePalette()
       }
       return event
     }
@@ -187,8 +181,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
     let chars = event.charactersIgnoringModifiers?.lowercased()
 
+    if event.keyCode == 49 {
+      if state.isTyping { return event }
+      if flags.contains(.command) || flags.contains(.option) || flags.contains(.control) {
+        return event
+      }
+      state.pressSpacePalette()
+      return nil
+    }
+
+    if state.showToolPalette {
+      if event.keyCode == 53 {
+        state.hideToolPalette()
+        return nil
+      }
+      if let chars, let char = chars.first, let tool = Tool(hotkey: char) {
+        state.pickToolFromPalette(tool)
+        return nil
+      }
+      return nil
+    }
+
     if flags.contains(.command) {
-      if state.showHelp { return nil }
+      if state.showHelp || state.showToolPalette { return nil }
       if state.isTyping { return event }
       switch chars {
       case "z":
@@ -240,11 +255,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         _ = state.handleEscape()
         return nil
       }
-      return nil
-    }
-
-    if event.keyCode == 49, !state.isTyping {
-      state.spaceHeld = true
       return nil
     }
 
@@ -326,6 +336,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     case "a":
       state.selectTool(.arrow)
       return nil
+    case "l":
+      state.selectTool(.line)
+      return nil
     case "d":
       state.selectTool(.draw)
       return nil
@@ -338,9 +351,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     case "i":
       state.selectTool(.spotlight)
       return nil
-    case "l":
-      state.toggleArrowHead()
-      return nil
     case "n":
       state.selectTool(.numbered)
       return nil
@@ -348,6 +358,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       state.selectTool(.redact)
       return nil
     case "x":
+      state.selectTool(.cross)
+      return nil
+    case "k":
       state.selectTool(.crop)
       return nil
     case "[":
@@ -377,6 +390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private struct LoadedImage {
     let image: NSImage
     let url: URL?
+    var cgImage: CGImage?
   }
 
   private static func loadLaunchImage() -> LoadedImage {
@@ -389,8 +403,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }()
 
     if args.contains("--clipboard") {
-      if let image = ClipboardService.imageFromPasteboard() {
-        return LoadedImage(image: image, url: nil)
+      if let image = ClipboardService.imageFromPasteboard(),
+         let loaded = ShotLoader.load(nsImage: image)
+      {
+        return LoadedImage(image: loaded.image, url: nil, cgImage: loaded.cgImage)
       }
       fputs("Annotator: no image on the clipboard.\n", stderr)
       exit(1)
@@ -403,9 +419,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         fullScreen: args.contains("--fullscreen"),
         repeatLast: args.contains("--repeat")
       ),
-         let image = NSImage(contentsOf: url)
+         let loaded = ShotLoader.load(url: url)
       {
-        return LoadedImage(image: image, url: url)
+        return LoadedImage(image: loaded.image, url: url, cgImage: loaded.cgImage)
       }
       fputs("Annotator: capture cancelled or failed.\n", stderr)
       exit(1)
@@ -416,8 +432,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     {
       let path = args[args.index(after: pathIndex)]
       let url = URL(fileURLWithPath: path)
-      if let image = NSImage(contentsOf: url) {
-        return LoadedImage(image: image, url: url)
+      if let loaded = ShotLoader.load(url: url) {
+        return LoadedImage(image: loaded.image, url: url, cgImage: loaded.cgImage)
       }
       fputs("Annotator: could not load image at \(path)\n", stderr)
       exit(1)
@@ -425,8 +441,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     if args.count > 1 {
       let path = args[1]
-      if !path.hasPrefix("-"), let image = NSImage(contentsOfFile: path) {
-        return LoadedImage(image: image, url: URL(fileURLWithPath: path))
+      if !path.hasPrefix("-") {
+        let url = URL(fileURLWithPath: path)
+        if let loaded = ShotLoader.load(url: url) {
+          return LoadedImage(image: loaded.image, url: url, cgImage: loaded.cgImage)
+        }
       }
     }
 
@@ -453,6 +472,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     NSGraphicsContext.restoreGraphicsState()
     let fallback = NSImage(size: size)
     fallback.addRepresentation(rep)
-    return LoadedImage(image: fallback, url: nil)
+    return LoadedImage(image: fallback, url: nil, cgImage: fallback.fullCGImage)
   }
 }

@@ -27,25 +27,27 @@ struct HelpOverlay: View {
         }
 
         section("Tools", rows: [
+          [("Space", "Hold for tools"), ("?", "All shortcuts")],
           [("V", "Select"), ("R", "Rectangle"), ("C", "Circle"), ("A", "Arrow")],
-          [("D", "Draw"), ("T", "Text"), ("H", "Fill"), ("I", "Spotlight")],
-          [("N", "Steps"), ("B", "Redact"), ("X", "Crop")],
+          [("L", "Line"), ("D", "Draw"), ("X", "Cross"), ("T", "Text")],
+          [("H", "Fill"), ("I", "Spotlight"), ("N", "Steps")],
+          [("B", "Redact"), ("K", "Crop")],
         ])
 
         section("While drawing", rows: [
-          [("⇧", "Square / 45°"), ("⌥", "Center / line"), ("[ ]", "Stroke")],
+          [("⇧", "Square / 45°"), ("⌥", "Center / invert"), ("[ ]", "Stroke")],
           [("1–0", "Colors"), ("⌥-click", "Eyedropper")],
         ])
 
         section("Edit", rows: [
           [("⌘Z", "Undo"), ("⇧⌘Z", "Redo"), ("⌫", "Delete")],
           [("↑↓←→", "Nudge"), ("⌘D", "Duplicate"), ("⌘[ ]", "Order")],
-          [("L", "Arrow / line"), ("Mid", "Curve"), ("Dot", "Round rect")],
+          [("Mid", "Curve arrow"), ("Dot", "Round rect")],
           [("Esc", "Deselect / cancel"), ("↩", "Edit text")],
         ])
 
         section("View", rows: [
-          [("Pinch", "Zoom"), ("Scroll", "Zoom"), ("Space-drag", "Pan")],
+          [("Pinch", "Zoom"), ("Scroll", "Zoom")],
           [("⌘+", "Zoom in"), ("⌘-", "Zoom out"), ("⌘0", "Reset")],
         ])
 
