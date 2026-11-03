@@ -17,6 +17,7 @@ enum Tool: String, CaseIterable, Identifiable {
   case numbered
   case redact
   case crop
+  case slice
 
   var id: String { rawValue }
 
@@ -35,6 +36,7 @@ enum Tool: String, CaseIterable, Identifiable {
     case .numbered: return "n"
     case .redact: return "b"
     case .crop: return "k"
+    case .slice: return "j"
     }
   }
 
@@ -53,6 +55,7 @@ enum Tool: String, CaseIterable, Identifiable {
     case .numbered: return "Steps"
     case .redact: return "Redact"
     case .crop: return "Crop"
+    case .slice: return "Slice"
     }
   }
 
@@ -71,6 +74,7 @@ enum Tool: String, CaseIterable, Identifiable {
     case .numbered: return "list.number"
     case .redact: return "eye.slash"
     case .crop: return "crop"
+    case .slice: return "scissors"
     }
   }
 
@@ -111,7 +115,7 @@ struct ToolPaletteGroup: Identifiable {
       .text, .highlight, .spotlight, .numbered,
     ]),
     ToolPaletteGroup(id: "cut", title: "Cut", tools: [
-      .redact, .crop,
+      .redact, .crop, .slice,
     ]),
   ]
 
@@ -332,6 +336,45 @@ struct Annotation: Identifiable, Equatable {
     }
   }
 
+  /// Keep a mark that sits fully on one side of a slice. Shift the far side. Drop anything the band crosses.
+  func sliced(axis: SliceAxis, lo: CGFloat, hi: CGFloat) -> Annotation? {
+    let rect = sliceBounds
+    let removed = hi - lo
+    switch axis {
+    case .horizontal:
+      if rect.maxX <= lo { return self }
+      if rect.minX >= hi { return translated(by: CGPoint(x: -removed, y: 0)) }
+      return nil
+    case .vertical:
+      if rect.maxY <= lo { return self }
+      if rect.minY >= hi { return translated(by: CGPoint(x: 0, y: -removed)) }
+      return nil
+    }
+  }
+
+  /// Bounds without the hit-slop padding used for selection.
+  private var sliceBounds: CGRect {
+    switch kind {
+    case let .arrow(start, end, control, _):
+      let c = control ?? midpoint(start, end)
+      let minX = min(start.x, end.x, c.x)
+      let minY = min(start.y, end.y, c.y)
+      let maxX = max(start.x, end.x, c.x)
+      let maxY = max(start.y, end.y, c.y)
+      return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    case let .path(points):
+      guard let first = points.first else { return .zero }
+      var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
+      for p in points.dropFirst() {
+        minX = min(minX, p.x); maxX = max(maxX, p.x)
+        minY = min(minY, p.y); maxY = max(maxY, p.y)
+      }
+      return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    default:
+      return boundingRect
+    }
+  }
+
   func resized(handle: ResizeHandle, to point: CGPoint) -> Annotation {
     switch kind {
     case let .rectangle(rect, radius):
@@ -428,6 +471,41 @@ enum Draft: Equatable {
   case shape(start: CGPoint, current: CGPoint)
   case path([CGPoint])
   case textPlacement(CGPoint)
+  /// `axis` stays nil until the drag has traveled far enough to lock.
+  case slice(start: CGPoint, current: CGPoint, axis: SliceAxis?)
+}
+
+/// Which way the slice drag is running. The removed band is perpendicular to this.
+enum SliceAxis: Equatable {
+  case horizontal
+  case vertical
+}
+
+enum SliceMetrics {
+  static let threshold: CGFloat = 8
+}
+
+func sliceAxis(from start: CGPoint, to current: CGPoint) -> SliceAxis? {
+  let dx = current.x - start.x
+  let dy = current.y - start.y
+  guard hypot(dx, dy) >= SliceMetrics.threshold else { return nil }
+  return abs(dx) >= abs(dy) ? .horizontal : .vertical
+}
+
+func sliceSpan(from a: CGFloat, to b: CGFloat, limit: CGFloat) -> (lo: CGFloat, hi: CGFloat) {
+  let lo = min(limit, max(0, min(a, b)))
+  let hi = min(limit, max(0, max(a, b)))
+  return (lo, hi)
+}
+
+func sliceRejection(lo: CGFloat, hi: CGFloat, limit: CGFloat) -> String? {
+  if hi - lo < SliceMetrics.threshold {
+    return "Slice · drag a little further"
+  }
+  if lo < SliceMetrics.threshold || hi > limit - SliceMetrics.threshold {
+    return "Slice · leave a piece on both sides"
+  }
+  return nil
 }
 
 enum DragSession: Equatable {

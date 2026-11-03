@@ -169,7 +169,76 @@ struct AnnotationOverlay: View {
     case let .textPlacement(origin):
       let marker = Path(ellipseIn: CGRect(x: origin.x - 3, y: origin.y - 3, width: 6, height: 6))
       context.fill(marker, with: .color(color))
+    case let .slice(start, current, axis):
+      drawSliceDraft(start: start, current: current, axis: axis, canvasSize: canvasSize, in: &context)
     }
+  }
+
+  private var sliceInk: Color { Color(red: 1, green: 0.23, blue: 0.19) }
+
+  private func drawSliceDraft(
+    start: CGPoint,
+    current: CGPoint,
+    axis: SliceAxis?,
+    canvasSize: CGSize,
+    in context: inout GraphicsContext
+  ) {
+    guard let axis else {
+      let dot = CGRect(x: start.x - 3.5, y: start.y - 3.5, width: 7, height: 7)
+      context.fill(Path(ellipseIn: dot), with: .color(sliceInk))
+      return
+    }
+
+    let rect: CGRect
+    let imageRemoved: CGFloat
+    switch axis {
+    case .horizontal:
+      let span = sliceSpan(from: start.x, to: current.x, limit: canvasSize.width)
+      rect = CGRect(x: span.lo, y: 0, width: span.hi - span.lo, height: canvasSize.height)
+      imageRemoved = canvasSize.width > 0
+        ? (span.hi - span.lo) / canvasSize.width * imageSize.width
+        : 0
+    case .vertical:
+      let span = sliceSpan(from: start.y, to: current.y, limit: canvasSize.height)
+      rect = CGRect(x: 0, y: span.lo, width: canvasSize.width, height: span.hi - span.lo)
+      imageRemoved = canvasSize.height > 0
+        ? (span.hi - span.lo) / canvasSize.height * imageSize.height
+        : 0
+    }
+    guard rect.width > 0.5, rect.height > 0.5 else { return }
+
+    context.fill(Path(rect), with: .color(sliceInk.opacity(0.34)))
+    var edges = Path()
+    switch axis {
+    case .horizontal:
+      edges.move(to: CGPoint(x: rect.minX, y: rect.minY))
+      edges.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+      edges.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+      edges.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+    case .vertical:
+      edges.move(to: CGPoint(x: rect.minX, y: rect.minY))
+      edges.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+      edges.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+      edges.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+    }
+    context.stroke(edges, with: .color(.white), lineWidth: 1.5)
+
+    let shortSide = min(rect.width, rect.height)
+    guard shortSide >= 28 else { return }
+    let caption = "\(Int(imageRemoved.rounded())) px"
+    let box = CGRect(
+      x: rect.midX - CGFloat(caption.count) * 3.6 - 8,
+      y: rect.midY - 9,
+      width: CGFloat(caption.count) * 7.2 + 16,
+      height: 18
+    )
+    context.fill(Path(roundedRect: box, cornerRadius: 4), with: .color(.black.opacity(0.72)))
+    let label = context.resolve(
+      Text(caption)
+        .font(.system(size: 11, weight: .semibold, design: .rounded))
+        .foregroundStyle(.white)
+    )
+    context.draw(label, at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
   }
 
   private func drawCropDraft(_ rect: CGRect, canvasSize: CGSize, in context: inout GraphicsContext) {

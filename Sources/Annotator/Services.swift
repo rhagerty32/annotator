@@ -375,6 +375,104 @@ enum ImageCropper {
   }
 }
 
+struct SlicedShot {
+  let image: NSImage
+  /// Cut edges in source image points, after the band is snapped to whole pixels.
+  let lo: CGFloat
+  let hi: CGFloat
+}
+
+enum ImageSlicer {
+  /// Removes a full-bleed band and draws the two sides flush.
+  /// `lo` and `hi` are image points with a top-left origin, same space as `ImageCropper`.
+  static func slice(_ image: NSImage, axis: SliceAxis, lo: CGFloat, hi: CGFloat) -> SlicedShot? {
+    guard hi > lo, image.size.width > 1, image.size.height > 1 else { return nil }
+    guard let cg = ShotLoader.cgImage(from: image) else { return nil }
+    let scaleX = CGFloat(cg.width) / image.size.width
+    let scaleY = CGFloat(cg.height) / image.size.height
+    guard scaleX > 0, scaleY > 0 else { return nil }
+
+    switch axis {
+    case .horizontal:
+      let loPx = Int((lo * scaleX).rounded())
+      let hiPx = Int((hi * scaleX).rounded())
+      guard loPx >= 1, hiPx < cg.width, hiPx > loPx else { return nil }
+      let leftRect = CGRect(x: 0, y: 0, width: loPx, height: cg.height)
+      let rightRect = CGRect(x: hiPx, y: 0, width: cg.width - hiPx, height: cg.height)
+      guard let left = cg.cropping(to: leftRect), let right = cg.cropping(to: rightRect) else {
+        return nil
+      }
+      let removed = CGFloat(hiPx - loPx) / scaleX
+      let size = NSSize(width: image.size.width - removed, height: image.size.height)
+      guard let joined = join([left, right], axis: .horizontal, pointSize: size) else { return nil }
+      return SlicedShot(image: joined, lo: CGFloat(loPx) / scaleX, hi: CGFloat(hiPx) / scaleX)
+    case .vertical:
+      let loPx = Int((lo * scaleY).rounded())
+      let hiPx = Int((hi * scaleY).rounded())
+      guard loPx >= 1, hiPx < cg.height, hiPx > loPx else { return nil }
+      let topRect = CGRect(x: 0, y: 0, width: cg.width, height: loPx)
+      let bottomRect = CGRect(x: 0, y: hiPx, width: cg.width, height: cg.height - hiPx)
+      guard let top = cg.cropping(to: topRect), let bottom = cg.cropping(to: bottomRect) else {
+        return nil
+      }
+      let removed = CGFloat(hiPx - loPx) / scaleY
+      let size = NSSize(width: image.size.width, height: image.size.height - removed)
+      guard let joined = join([top, bottom], axis: .vertical, pointSize: size) else { return nil }
+      return SlicedShot(image: joined, lo: CGFloat(loPx) / scaleY, hi: CGFloat(hiPx) / scaleY)
+    }
+  }
+
+  /// `parts` are in visual order: left-to-right, or top-to-bottom.
+  /// CGImage rows start at the top, and a context's y axis points up.
+  private static func join(_ parts: [CGImage], axis: SliceAxis, pointSize: NSSize) -> NSImage? {
+    guard let first = parts.first else { return nil }
+    let width = axis == .horizontal ? parts.reduce(0) { $0 + $1.width } : first.width
+    let height = axis == .vertical ? parts.reduce(0) { $0 + $1.height } : first.height
+    guard width > 0, height > 0 else { return nil }
+    guard let ctx = drawingContext(width: width, height: height, preferred: first.colorSpace) else {
+      return nil
+    }
+    ctx.interpolationQuality = .none
+
+    switch axis {
+    case .horizontal:
+      var x = 0
+      for part in parts {
+        ctx.draw(part, in: CGRect(x: x, y: 0, width: part.width, height: part.height))
+        x += part.width
+      }
+    case .vertical:
+      var y = height
+      for part in parts {
+        y -= part.height
+        ctx.draw(part, in: CGRect(x: 0, y: y, width: part.width, height: part.height))
+      }
+    }
+
+    guard let out = ctx.makeImage() else { return nil }
+    return NSImage(cgImage: out, size: pointSize)
+  }
+
+  private static func drawingContext(width: Int, height: Int, preferred: CGColorSpace?) -> CGContext? {
+    let spaces = [preferred, CGColorSpace(name: CGColorSpace.sRGB), CGColorSpaceCreateDeviceRGB()]
+      .compactMap { $0 }
+    for space in spaces {
+      if let ctx = CGContext(
+        data: nil,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: 0,
+        space: space,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+      ) {
+        return ctx
+      }
+    }
+    return nil
+  }
+}
+
 enum PixelateService {
   private static let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 

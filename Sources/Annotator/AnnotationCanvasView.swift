@@ -115,7 +115,11 @@ struct AnnotationCanvasView: View {
   }
 
   private func shotStroke(for stage: CanvasStage) -> Color {
-    stage == .checker ? Color.clear : Color.white.opacity(0.16)
+    switch stage {
+    case .checker: return .clear
+    case .void: return Color.white.opacity(0.16)
+    case .chrome: return Color.primary.opacity(0.18)
+    }
   }
 
   private func dragGesture() -> some Gesture {
@@ -248,6 +252,12 @@ struct AnnotationCanvasView: View {
       return .path(points.map { imageToView($0, imageSize: imageSize, viewSize: viewSize) })
     case let .textPlacement(origin):
       return .textPlacement(imageToView(origin, imageSize: imageSize, viewSize: viewSize))
+    case let .slice(start, current, axis):
+      return .slice(
+        start: imageToView(start, imageSize: imageSize, viewSize: viewSize),
+        current: imageToView(current, imageSize: imageSize, viewSize: viewSize),
+        axis: axis
+      )
     }
   }
 

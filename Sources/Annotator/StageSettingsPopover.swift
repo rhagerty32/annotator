@@ -3,17 +3,12 @@ import SwiftUI
 struct StageSettingsPopover: View {
   @ObservedObject var state: AppState
 
-  private let ink = Color(red: 0.92, green: 0.93, blue: 0.94)
-  private let muted = Color(red: 0.62, green: 0.64, blue: 0.67)
-  private let accent = Color(red: 1, green: 0.23, blue: 0.19)
-
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
+    VStack(alignment: .leading, spacing: 2) {
       Text("Stage")
-        .font(.system(size: 11, weight: .semibold))
-        .foregroundStyle(muted)
-        .textCase(.uppercase)
-        .tracking(0.5)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
         .padding(.bottom, 4)
 
       ForEach(CanvasStage.allCases) { stage in
@@ -24,40 +19,39 @@ struct StageSettingsPopover: View {
             StageSwatch(stage: stage)
             VStack(alignment: .leading, spacing: 1) {
               Text(stage.title)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(ink)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.primary)
               Text(stage.blurb)
-                .font(.system(size: 11))
-                .foregroundStyle(muted)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
             if state.stage == stage {
               Image(systemName: "checkmark")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(accent)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
             }
           }
           .padding(.horizontal, 8)
-          .padding(.vertical, 7)
+          .padding(.vertical, 6)
           .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-              .fill(state.stage == stage ? Color.white.opacity(0.08) : Color.clear)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+              .fill(state.stage == stage ? Color.primary.opacity(0.08) : Color.clear)
           )
+          .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(stage.title). \(stage.blurb)")
       }
     }
-    .padding(12)
-    .frame(width: 260)
-    .background(
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
-        .fill(Color(red: 0.14, green: 0.14, blue: 0.15))
-        .shadow(color: .black.opacity(0.45), radius: 18, y: 8)
-    )
+    .padding(10)
+    .frame(width: 268)
+    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
     .overlay(
-      RoundedRectangle(cornerRadius: 12, style: .continuous)
-        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
     )
+    .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
   }
 }
 
@@ -72,14 +66,14 @@ private struct StageSwatch: View {
         CheckerMini()
       }
       RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-        .fill(Color.white.opacity(0.88))
+        .fill(Color.white.opacity(0.92))
         .padding(7)
     }
     .frame(width: 36, height: 26)
     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
     .overlay(
       RoundedRectangle(cornerRadius: 4, style: .continuous)
-        .stroke(Color.white.opacity(0.12), lineWidth: 1)
+        .strokeBorder(Color.primary.opacity(0.16), lineWidth: 1)
     )
   }
 }

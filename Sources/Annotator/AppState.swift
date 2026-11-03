@@ -228,6 +228,11 @@ final class AppState: ObservableObject {
     case .rectangle, .circle, .arrow, .line, .cross, .highlight, .spotlight, .redact, .crop:
       draft = .shape(start: point, current: point)
       dragSession = .draw
+    case .slice:
+      dragSession = .draw
+      guard !sliceBlocked else { return }
+      NSCursor.crosshair.set()
+      draft = .slice(start: point, current: point, axis: nil)
     case .draw:
       draft = .path([point])
       dragSession = .draw
@@ -264,6 +269,9 @@ final class AppState: ObservableObject {
       commitDraw(at: point)
       dragSession = nil
       didPushForGesture = false
+      if tool == .slice {
+        NSCursor.arrow.set()
+      }
     case .none:
       didPushForGesture = false
     }
@@ -450,6 +458,10 @@ final class AppState: ObservableObject {
       draft = nil
       dragSession = nil
       didPushForGesture = false
+      if tool == .slice {
+        NSCursor.arrow.set()
+      }
+      statusMessage = status(for: tool)
       return true
     }
     return false
@@ -594,6 +606,17 @@ final class AppState: ObservableObject {
       case let .shape(start, _):
         draft = .shape(start: start, current: point)
         reportDraftSize(start: start, current: point)
+      case let .slice(start, _, locked):
+        let axis = locked ?? sliceAxis(from: start, to: point)
+        draft = .slice(start: start, current: point, axis: axis)
+        if axis == .horizontal {
+          NSCursor.resizeLeftRight.set()
+        } else if axis == .vertical {
+          NSCursor.resizeUpDown.set()
+        } else {
+          NSCursor.crosshair.set()
+        }
+        statusMessage = sliceDragStatus(start: start, current: point, axis: axis)
       case var .path(points):
         points.append(point)
         draft = .path(points)
@@ -841,6 +864,8 @@ final class AppState: ObservableObject {
       default:
         break
       }
+    case let .slice(start, _, axis):
+      commitSlice(start: start, current: point, axis: axis)
     case var .path(points):
       points.append(point)
       if points.count > 1 {
@@ -869,6 +894,55 @@ final class AppState: ObservableObject {
     statusMessage = "Cropped · V select"
   }
 
+  private var sliceBlocked: Bool {
+    let flags = NSEvent.modifierFlags
+    if flags.contains(.shift) || flags.contains(.option)
+      || flags.contains(.command) || flags.contains(.control)
+    {
+      return true
+    }
+    return NSEvent.pressedMouseButtons & ~1 != 0
+  }
+
+  private func sliceDragStatus(start: CGPoint, current: CGPoint, axis: SliceAxis?) -> String {
+    guard let axis else { return "Slice · keep going" }
+    let limit = axis == .horizontal ? image.size.width : image.size.height
+    let startValue = axis == .horizontal ? start.x : start.y
+    let currentValue = axis == .horizontal ? current.x : current.y
+    let span = sliceSpan(from: startValue, to: currentValue, limit: limit)
+    if let reason = sliceRejection(lo: span.lo, hi: span.hi, limit: limit) {
+      return reason
+    }
+    let name = axis == .horizontal ? "horizontal" : "vertical"
+    return String(format: "Slice · %@ · %.0f px", name, span.hi - span.lo)
+  }
+
+  private func commitSlice(start: CGPoint, current: CGPoint, axis: SliceAxis?) {
+    guard let axis else {
+      statusMessage = status(for: .slice)
+      return
+    }
+    let limit = axis == .horizontal ? image.size.width : image.size.height
+    let startValue = axis == .horizontal ? start.x : start.y
+    let currentValue = axis == .horizontal ? current.x : current.y
+    let span = sliceSpan(from: startValue, to: currentValue, limit: limit)
+    if let reason = sliceRejection(lo: span.lo, hi: span.hi, limit: limit) {
+      statusMessage = reason
+      return
+    }
+    guard let sliced = ImageSlicer.slice(image, axis: axis, lo: span.lo, hi: span.hi) else {
+      statusMessage = "Slice · leave a piece on both sides"
+      return
+    }
+    pushHistory()
+    annotations = annotations.compactMap { $0.sliced(axis: axis, lo: sliced.lo, hi: sliced.hi) }
+    image = sliced.image
+    selectedID = nil
+    resetView()
+    let removed = Int((sliced.hi - sliced.lo).rounded())
+    statusMessage = "Removed \(removed) px · ⌘Z undo"
+  }
+
   private func replace(id: UUID, with annotation: Annotation) {
     guard let index = annotations.firstIndex(where: { $0.id == id }) else { return }
     annotations[index] = annotation
@@ -890,6 +964,8 @@ final class AppState: ObservableObject {
       return "Redact · drag to pixelate"
     case .crop:
       return "Crop · drag a region · ⇧ square"
+    case .slice:
+      return "Slice · drag sideways or up and down"
     case .cross:
       return "Cross · drag an X · click for a small one · ⇧ square"
     case .arrow:

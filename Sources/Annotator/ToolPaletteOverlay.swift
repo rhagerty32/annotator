@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ToolPaletteOverlay: View {
@@ -5,14 +6,11 @@ struct ToolPaletteOverlay: View {
   let onPick: (Tool) -> Void
   let onDismiss: () -> Void
 
-  private let ink = Color(red: 0.92, green: 0.93, blue: 0.94)
-  private let muted = Color(red: 0.62, green: 0.64, blue: 0.67)
-  private let surface = Color(red: 0.14, green: 0.14, blue: 0.15)
-  private let accent = Color(red: 1, green: 0.23, blue: 0.19)
+  private let accent = Color.accentColor
 
   var body: some View {
     ZStack {
-      Color.black.opacity(0.55)
+      Color.black.opacity(0.28)
         .contentShape(Rectangle())
         .onTapGesture(perform: onDismiss)
 
@@ -32,12 +30,12 @@ struct ToolPaletteOverlay: View {
     VStack(alignment: .leading, spacing: layout.sectionGap) {
       HStack(alignment: .firstTextBaseline) {
         Text("Tools")
-          .font(.system(size: layout.titleSize, weight: .semibold, design: .rounded))
-          .foregroundStyle(ink)
+          .font(.system(size: layout.titleSize, weight: .semibold))
+          .foregroundStyle(.primary)
         Spacer(minLength: 8)
           Text("Hold space · press a key")
           .font(.system(size: 12, weight: .medium))
-          .foregroundStyle(muted)
+          .foregroundStyle(.secondary)
           .lineLimit(1)
           .minimumScaleFactor(0.8)
       }
@@ -45,8 +43,8 @@ struct ToolPaletteOverlay: View {
       ForEach(ToolPaletteGroup.overlay) { group in
         VStack(alignment: .leading, spacing: 6) {
           Text(group.title)
-            .font(.system(size: 10, weight: .semibold, design: .rounded))
-            .foregroundStyle(muted)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(.secondary)
             .textCase(.uppercase)
             .tracking(0.7)
           LazyVGrid(columns: layout.columns, alignment: .leading, spacing: layout.gap) {
@@ -55,8 +53,6 @@ struct ToolPaletteOverlay: View {
                 tool: tool,
                 active: active == tool,
                 accent: accent,
-                ink: ink,
-                muted: muted,
                 layout: layout
               ) {
                 onPick(tool)
@@ -67,14 +63,12 @@ struct ToolPaletteOverlay: View {
       }
     }
     .padding(layout.pad)
-    .background(
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .fill(surface)
-    )
+    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     .overlay(
-      RoundedRectangle(cornerRadius: 16, style: .continuous)
-        .stroke(Color.white.opacity(0.1), lineWidth: 1)
+      RoundedRectangle(cornerRadius: 12, style: .continuous)
+        .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
     )
+    .shadow(color: .black.opacity(0.22), radius: 28, y: 14)
     .onTapGesture {}
   }
 }
@@ -120,8 +114,6 @@ private struct PaletteCard: View {
   let tool: Tool
   let active: Bool
   let accent: Color
-  let ink: Color
-  let muted: Color
   let layout: PaletteLayout
   let action: () -> Void
 
@@ -132,15 +124,15 @@ private struct PaletteCard: View {
       VStack(spacing: 4) {
         Text(tool.hotkey.uppercased())
           .font(.system(size: layout.keySize, weight: .bold, design: .monospaced))
-          .foregroundStyle(active ? accent : ink)
+          .foregroundStyle(active ? accent : Color.primary)
           .minimumScaleFactor(0.6)
           .lineLimit(1)
         Image(systemName: tool.symbolName)
           .font(.system(size: layout.iconSize, weight: .semibold))
-          .foregroundStyle(active ? accent : ink.opacity(0.9))
+          .foregroundStyle(active ? accent : Color.primary)
         Text(tool.label)
-          .font(.system(size: layout.labelSize, weight: .medium, design: .rounded))
-          .foregroundStyle(active ? accent.opacity(0.9) : muted)
+          .font(.system(size: layout.labelSize, weight: .medium))
+          .foregroundStyle(active ? accent : Color.secondary)
           .lineLimit(1)
           .minimumScaleFactor(0.7)
       }
@@ -152,7 +144,7 @@ private struct PaletteCard: View {
       )
       .overlay(
         RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .stroke(active ? accent.opacity(0.7) : Color.white.opacity(0.08), lineWidth: 1)
+          .strokeBorder(active ? accent.opacity(0.85) : Color.primary.opacity(0.08), lineWidth: 1)
       )
       .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
@@ -163,8 +155,8 @@ private struct PaletteCard: View {
   }
 
   private var fill: Color {
-    if active { return Color.white.opacity(0.12) }
-    if hovering { return Color.white.opacity(0.08) }
-    return Color.white.opacity(0.04)
+    if active { return Color.primary.opacity(0.12) }
+    if hovering { return Color.primary.opacity(0.07) }
+    return Color.primary.opacity(0.04)
   }
 }

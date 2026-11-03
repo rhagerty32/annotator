@@ -120,13 +120,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     let panel = AnnotatorWindow(
       contentRect: NSRect(origin: .zero, size: size),
-      styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+      styleMask: [.titled, .closable, .miniaturizable, .resizable],
       backing: .buffered,
       defer: false
     )
     panel.title = "Annotator"
     panel.titleVisibility = .hidden
-    panel.titlebarAppearsTransparent = true
+    panel.titlebarAppearsTransparent = false
+    panel.titlebarSeparatorStyle = .line
+    panel.toolbarStyle = .unified
+    panel.tabbingMode = .disallowed
     panel.hidesOnDeactivate = false
     panel.isMovableByWindowBackground = true
     panel.level = .floating
@@ -136,12 +139,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     panel.minSize = NSSize(width: AnnotatorChrome.minWidth, height: AnnotatorChrome.minHeight)
     panel.delegate = self
 
-    let root = RootView(state: state)
-    let host = NSHostingView(rootView: root)
-    host.sizingOptions = []
-    host.clipsToBounds = true
-    host.autoresizingMask = [.width, .height]
-    panel.contentView = host
+    let host = NSHostingController(rootView: RootView(state: state))
+    if let hostingView = host.view as? NSHostingView<RootView> {
+      hostingView.sizingOptions = []
+    }
+    panel.contentViewController = host
+    panel.toolbar?.allowsUserCustomization = false
+    panel.toolbar?.displayMode = .iconOnly
 
     self.panel = panel
 
@@ -362,6 +366,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       return nil
     case "k":
       state.selectTool(.crop)
+      return nil
+    case "j":
+      state.selectTool(.slice)
       return nil
     case "[":
       state.nudgeStroke(-1)
