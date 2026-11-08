@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import CoreText
 import Foundation
 import SwiftUI
 
@@ -79,7 +80,7 @@ enum Tool: String, CaseIterable, Identifiable {
   }
 
   var placesOnClick: Bool {
-    self == .text || self == .numbered
+    self == .numbered
   }
 
   var drawsLine: Bool {
@@ -135,10 +136,11 @@ enum AnnotationColor: String, CaseIterable, Identifiable, Equatable {
   case purple
   case pink
   case white
+  case black
 
   var id: String { rawValue }
 
-  /// Keyboard digit 1…9, 0 for white.
+  /// Keyboard digit 1…9, 0 for white, − for black.
   var digitHotkey: String {
     switch self {
     case .red: return "1"
@@ -151,6 +153,7 @@ enum AnnotationColor: String, CaseIterable, Identifiable, Equatable {
     case .purple: return "8"
     case .pink: return "9"
     case .white: return "0"
+    case .black: return "-"
     }
   }
 
@@ -166,6 +169,26 @@ enum AnnotationColor: String, CaseIterable, Identifiable, Equatable {
     case .purple: return Color(red: 0.69, green: 0.32, blue: 0.87)
     case .pink: return Color(red: 1.00, green: 0.33, blue: 0.64)
     case .white: return Color(red: 0.98, green: 0.98, blue: 0.98)
+    case .black: return Color(red: 0, green: 0, blue: 0)
+    }
+  }
+}
+
+enum RedactStyle: String, Equatable {
+  case pixelate
+  case blur
+
+  var label: String {
+    switch self {
+    case .pixelate: return "Pixelate"
+    case .blur: return "Blur"
+    }
+  }
+
+  var symbolName: String {
+    switch self {
+    case .pixelate: return "eye.slash"
+    case .blur: return "drop.halffull"
     }
   }
 }
@@ -174,6 +197,8 @@ enum ResizeHandle: Equatable {
   case topLeft, topRight, bottomLeft, bottomRight
   case rectRadius
   case arrowStart, arrowEnd, arrowCurve
+  case textWidth
+  case textScale
 }
 
 struct Annotation: Identifiable, Equatable {
@@ -188,10 +213,10 @@ struct Annotation: Identifiable, Equatable {
     case cross(CGRect)
     case highlight(CGRect)
     case spotlight(CGRect)
-    case redact(CGRect)
+    case redact(CGRect, style: RedactStyle)
     case arrow(start: CGPoint, end: CGPoint, control: CGPoint?, headed: Bool)
     case path([CGPoint])
-    case text(origin: CGPoint, string: String)
+    case text(origin: CGPoint, width: CGFloat, fontSize: CGFloat, string: String)
     case badge(origin: CGPoint, index: Int)
   }
 
@@ -223,7 +248,9 @@ struct Annotation: Identifiable, Equatable {
   var boundingRect: CGRect {
     switch kind {
     case let .rectangle(rect, _), let .circle(rect), let .cross(rect), let .highlight(rect),
-         let .spotlight(rect), let .redact(rect):
+         let .spotlight(rect):
+      return rect.normalized
+    case let .redact(rect, _):
       return rect.normalized
     case let .arrow(start, end, control, _):
       let c = control ?? midpoint(start, end)
@@ -242,10 +269,10 @@ struct Annotation: Identifiable, Equatable {
       }
       return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
         .insetBy(dx: -6, dy: -6)
-    case let .text(origin, string):
-      let width = max(40, CGFloat(string.count) * 9)
-      let height: CGFloat = 22
-      return CGRect(x: origin.x, y: origin.y, width: width, height: height)
+    case let .text(origin, width, fontSize, string):
+      let boxWidth = max(36, width)
+      let height = TextLayout.measure(string: string, fontSize: fontSize, width: boxWidth).height
+      return CGRect(x: origin.x, y: origin.y, width: boxWidth, height: max(fontSize, height))
     case let .badge(origin, _):
       return CGRect(x: origin.x - 16, y: origin.y - 16, width: 32, height: 32)
     }
@@ -276,7 +303,9 @@ struct Annotation: Identifiable, Equatable {
       let c = CGPoint(x: r.maxX, y: r.minY)
       let d = CGPoint(x: r.minX, y: r.maxY)
       return min(distanceToSegment(point, a, b), distanceToSegment(point, c, d)) <= tolerance + 2
-    case let .highlight(rect), let .spotlight(rect), let .redact(rect):
+    case let .highlight(rect), let .spotlight(rect):
+      return rect.normalized.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+    case let .redact(rect, _):
       return rect.normalized.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
     case let .arrow(start, end, control, _):
       if let control {
@@ -312,8 +341,8 @@ struct Annotation: Identifiable, Equatable {
       return copying(kind: .highlight(rect.offsetBy(dx: delta.x, dy: delta.y)))
     case let .spotlight(rect):
       return copying(kind: .spotlight(rect.offsetBy(dx: delta.x, dy: delta.y)))
-    case let .redact(rect):
-      return copying(kind: .redact(rect.offsetBy(dx: delta.x, dy: delta.y)))
+    case let .redact(rect, style):
+      return copying(kind: .redact(rect.offsetBy(dx: delta.x, dy: delta.y), style: style))
     case let .arrow(start, end, control, headed):
       return copying(kind: .arrow(
         start: CGPoint(x: start.x + delta.x, y: start.y + delta.y),
@@ -323,9 +352,11 @@ struct Annotation: Identifiable, Equatable {
       ))
     case let .path(points):
       return copying(kind: .path(points.map { CGPoint(x: $0.x + delta.x, y: $0.y + delta.y) }))
-    case let .text(origin, string):
+    case let .text(origin, width, fontSize, string):
       return copying(kind: .text(
         origin: CGPoint(x: origin.x + delta.x, y: origin.y + delta.y),
+        width: width,
+        fontSize: fontSize,
         string: string
       ))
     case let .badge(origin, index):
@@ -396,8 +427,27 @@ struct Annotation: Identifiable, Equatable {
       return copying(kind: .highlight(resize(rect.normalized, handle: handle, to: point)))
     case let .spotlight(rect):
       return copying(kind: .spotlight(resize(rect.normalized, handle: handle, to: point)))
-    case let .redact(rect):
-      return copying(kind: .redact(resize(rect.normalized, handle: handle, to: point)))
+    case let .redact(rect, style):
+      return copying(kind: .redact(resize(rect.normalized, handle: handle, to: point), style: style))
+    case let .text(origin, width, fontSize, string):
+      switch handle {
+      case .textWidth:
+        let next = max(36, point.x - origin.x)
+        return copying(kind: .text(origin: origin, width: next, fontSize: fontSize, string: string))
+      case .textScale:
+        let box = boundingRect
+        let scaleX = (point.x - origin.x) / max(width, 1)
+        let scaleY = (point.y - origin.y) / max(box.height, 12)
+        let scale = min(8, max(0.35, max(scaleX, scaleY)))
+        return copying(kind: .text(
+          origin: origin,
+          width: max(36, width * scale),
+          fontSize: min(160, max(11, fontSize * scale)),
+          string: string
+        ))
+      default:
+        return self
+      }
     case let .arrow(start, end, control, headed):
       switch handle {
       case .arrowStart:
@@ -425,6 +475,8 @@ struct Annotation: Identifiable, Equatable {
       return [.topLeft, .topRight, .bottomLeft, .bottomRight]
     case .arrow:
       return [.arrowStart, .arrowEnd, .arrowCurve]
+    case .text:
+      return [.textWidth, .textScale]
     default:
       return []
     }
@@ -445,13 +497,20 @@ struct Annotation: Identifiable, Equatable {
       default: return nil
       }
     case let .circle(rect), let .cross(rect), let .highlight(rect), let .spotlight(rect),
-         let .redact(rect):
+         let .redact(rect, _):
       let r = rect.normalized
       switch handle {
       case .topLeft: return CGPoint(x: r.minX, y: r.minY)
       case .topRight: return CGPoint(x: r.maxX, y: r.minY)
       case .bottomLeft: return CGPoint(x: r.minX, y: r.maxY)
       case .bottomRight: return CGPoint(x: r.maxX, y: r.maxY)
+      default: return nil
+      }
+    case .text:
+      let box = boundingRect
+      switch handle {
+      case .textWidth: return CGPoint(x: box.maxX, y: box.midY)
+      case .textScale: return CGPoint(x: box.maxX, y: box.maxY)
       default: return nil
       }
     case let .arrow(start, end, control, _):
@@ -470,9 +529,55 @@ struct Annotation: Identifiable, Equatable {
 enum Draft: Equatable {
   case shape(start: CGPoint, current: CGPoint)
   case path([CGPoint])
-  case textPlacement(CGPoint)
+  /// Width grows with the drag. A click (tiny width) uses the default box.
+  case textBox(origin: CGPoint, width: CGFloat)
   /// `axis` stays nil until the drag has traveled far enough to lock.
   case slice(start: CGPoint, current: CGPoint, axis: SliceAxis?)
+}
+
+enum TextLayout {
+  struct Measured {
+    var lines: [String]
+    var lineHeight: CGFloat
+    var height: CGFloat
+  }
+
+  static func font(for stroke: CGFloat) -> CGFloat {
+    max(13, stroke * 7)
+  }
+
+  static func measure(string: String, fontSize: CGFloat, width: CGFloat) -> Measured {
+    let font = NSFont.systemFont(ofSize: max(8, fontSize), weight: .semibold)
+    let lineHeight = max(fontSize, ceil(font.ascender - font.descender + font.leading))
+    let source = string
+    if source.isEmpty {
+      return Measured(lines: [], lineHeight: lineHeight, height: lineHeight)
+    }
+
+    let attr = NSAttributedString(string: source, attributes: [.font: font])
+    let setter = CTFramesetterCreateWithAttributedString(attr)
+    let path = CGPath(
+      rect: CGRect(x: 0, y: 0, width: max(8, width), height: 100_000),
+      transform: nil
+    )
+    let frame = CTFramesetterCreateFrame(setter, CFRange(location: 0, length: attr.length), path, nil)
+    let ctLines = CTFrameGetLines(frame) as? [CTLine] ?? []
+    let ns = source as NSString
+    var lines: [String] = []
+    for line in ctLines {
+      let range = CTLineGetStringRange(line)
+      guard range.location != kCFNotFound, range.length > 0 else { continue }
+      var chunk = ns.substring(with: NSRange(location: range.location, length: range.length))
+      if chunk.hasSuffix("\n") { chunk.removeLast() }
+      lines.append(chunk)
+    }
+    if lines.isEmpty { lines = [source] }
+    return Measured(
+      lines: lines,
+      lineHeight: lineHeight,
+      height: max(lineHeight, CGFloat(lines.count) * lineHeight)
+    )
+  }
 }
 
 /// Which way the slice drag is running. The removed band is perpendicular to this.

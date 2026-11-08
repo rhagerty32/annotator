@@ -79,7 +79,9 @@ struct RootView: View {
       if state.showToolPalette {
         ToolPaletteOverlay(
           active: state.tool,
+          redactStyle: state.redactStyle,
           onPick: { state.pickToolFromPalette($0) },
+          onRedact: { state.pickRedactFromPalette($0) },
           onDismiss: { state.hideToolPalette() }
         )
       }
@@ -191,19 +193,36 @@ struct RootView: View {
     let shown = face(for: group)
     let active = group.tools.contains(state.tool)
     return Menu {
-      ForEach(group.tools) { tool in
-        Button {
-          pick(tool)
-        } label: {
-          Label(menuTitle(for: tool), systemImage: state.tool == tool ? "checkmark" : tool.symbolName)
+      if group.id == "cut" {
+        redactItem(.pixelate)
+        redactItem(.blur)
+        ForEach(group.tools.filter { $0 != .redact }) { tool in
+          Button {
+            pick(tool)
+          } label: {
+            Label(menuTitle(for: tool), systemImage: state.tool == tool ? "checkmark" : tool.symbolName)
+          }
+        }
+      } else {
+        ForEach(group.tools) { tool in
+          Button {
+            pick(tool)
+          } label: {
+            Label(menuTitle(for: tool), systemImage: state.tool == tool ? "checkmark" : tool.symbolName)
+          }
         }
       }
     } label: {
-      Image(systemName: shown.symbolName)
+      Image(systemName: symbol(for: shown))
         .symbolRenderingMode(.palette)
         .foregroundStyle(active ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.primary))
     } primaryAction: {
-      pick(shown)
+      if shown == .redact {
+        state.selectRedact(state.redactStyle)
+        remember(.redact)
+      } else {
+        pick(shown)
+      }
     }
     .menuIndicator(.visible)
     .help("\(shown.label) (\(shown.hotkey.uppercased()))")
@@ -216,8 +235,23 @@ struct RootView: View {
     "\(tool.label)  \(tool.hotkey.uppercased())"
   }
 
+  private func symbol(for tool: Tool) -> String {
+    if tool == .redact { return state.redactStyle.symbolName }
+    return tool.symbolName
+  }
+
+  private func redactItem(_ style: RedactStyle) -> some View {
+    let on = state.tool == .redact && state.redactStyle == style
+    return Button {
+      state.selectRedact(style)
+      remember(.redact)
+    } label: {
+      Label("\(style.label)  B", systemImage: on ? "checkmark" : style.symbolName)
+    }
+  }
+
   private var colorPalette: some View {
-    HStack(spacing: 3) {
+    HStack(spacing: 2) {
       ForEach(AnnotationColor.allCases) { color in
         Button {
           state.setColor(color)
@@ -225,15 +259,18 @@ struct RootView: View {
           ZStack {
             Circle()
               .strokeBorder(state.activeColor == color ? Color.primary : Color.clear, lineWidth: 1.5)
-              .frame(width: 18, height: 18)
+              .frame(width: 16, height: 16)
             Circle()
               .fill(color.swatch)
-              .frame(width: 12, height: 12)
+              .frame(width: 11, height: 11)
               .overlay(
-                Circle().strokeBorder(Color.black.opacity(0.28), lineWidth: 0.5)
+                Circle().strokeBorder(
+                  color == .black ? Color.white.opacity(0.45) : Color.black.opacity(0.28),
+                  lineWidth: 0.5
+                )
               )
           }
-          .frame(width: 20, height: 22)
+          .frame(width: 18, height: 22)
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

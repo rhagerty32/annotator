@@ -1,5 +1,5 @@
-import { launchAnnotator } from "./launch";
+import { launchFastCapture } from "./launch";
 
 export default async function Command() {
-  await launchAnnotator(["--capture", "--delay", "3"]);
+  await launchFastCapture({ delay: 3 });
 }

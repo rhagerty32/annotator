@@ -29,18 +29,18 @@ struct HelpOverlay: View {
           [("V", "Select"), ("R", "Rectangle"), ("C", "Circle"), ("A", "Arrow")],
           [("L", "Line"), ("D", "Draw"), ("X", "Cross"), ("T", "Text")],
           [("H", "Fill"), ("I", "Spotlight"), ("N", "Steps")],
-          [("B", "Redact"), ("K", "Crop"), ("J", "Slice")],
+          [("B", "Pixelate / blur"), ("K", "Crop"), ("J", "Slice")],
         ])
 
         section("While drawing", rows: [
           [("⇧", "Square / 45°"), ("⌥", "Center / invert"), ("[ ]", "Stroke")],
-          [("1–0", "Colors"), ("⌥-click", "Eyedropper")],
+          [("1–0 −", "Colors"), ("⌥-click", "Eyedropper")],
         ])
 
         section("Edit", rows: [
           [("⌘Z", "Undo"), ("⇧⌘Z", "Redo"), ("⌫", "Delete")],
           [("↑↓←→", "Nudge"), ("⌘D", "Duplicate"), ("⌘[ ]", "Order")],
-          [("Mid", "Curve arrow"), ("Dot", "Round rect")],
+          [("Mid", "Curve arrow"), ("Dot", "Round rect"), ("Edge", "Text width")],
           [("Esc", "Deselect / cancel"), ("↩", "Edit text")],
         ])
 

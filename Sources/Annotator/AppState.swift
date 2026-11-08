@@ -1,21 +1,40 @@
 import AppKit
+import CaptureKit
 import SwiftUI
 
 @MainActor
 final class AppState: ObservableObject {
   @Published var image: NSImage {
-    didSet { cgImage = ShotLoader.cgImage(from: image) }
+    didSet {
+      cgImage = ShotLoader.cgImage(from: image)
+      sessionImageDirty = true
+      schedulePersist()
+    }
   }
   /// Full-resolution bitmap for the canvas. Kept in sync with `image`.
   private(set) var cgImage: CGImage?
-  @Published var annotations: [Annotation] = []
-  @Published var tool: Tool = .rectangle
-  @Published var activeColor: AnnotationColor = .red
-  @Published var strokeWidth: CGFloat
+  @Published var annotations: [Annotation] = [] {
+    didSet { schedulePersist() }
+  }
+  @Published var tool: Tool = .rectangle {
+    didSet { UserDefaults.standard.set(tool.rawValue, forKey: Self.toolDefaultsKey) }
+  }
+  @Published var activeColor: AnnotationColor = .red {
+    didSet { UserDefaults.standard.set(activeColor.rawValue, forKey: Self.colorDefaultsKey) }
+  }
+  @Published var strokeWidth: CGFloat {
+    didSet { UserDefaults.standard.set(Double(strokeWidth), forKey: Self.strokeDefaultsKey) }
+  }
+  @Published var redactStyle: RedactStyle = .pixelate {
+    didSet { UserDefaults.standard.set(redactStyle.rawValue, forKey: Self.redactDefaultsKey) }
+  }
   @Published var draft: Draft?
   @Published var isTyping = false
   @Published var textDraft = ""
   @Published var textOrigin: CGPoint?
+  @Published var textWidth: CGFloat = 220
+  @Published var textFont: CGFloat = 21
+  @Published var textColor: AnnotationColor = .red
   @Published var selectedID: UUID?
   @Published var editingID: UUID?
   @Published var showHelp = false
@@ -43,17 +62,58 @@ final class AppState: ObservableObject {
   private var didPushForGesture = false
   private var lastPointer: CGPoint?
   private var spacePaletteHeld = false
+  private let remembersSession: Bool
+  private var sessionImageDirty = true
+  private var persistScheduled = false
 
-  init(image: NSImage, imageURL: URL? = nil, cgImage: CGImage? = nil) {
+  init(
+    image: NSImage,
+    imageURL: URL? = nil,
+    cgImage: CGImage? = nil,
+    annotations: [Annotation] = [],
+    remembersSession: Bool = false
+  ) {
+    self.remembersSession = remembersSession
     self.image = image
     self.imageURL = imageURL
     self.cgImage = cgImage ?? ShotLoader.cgImage(from: image)
-    self.strokeWidth = max(2.5, image.size.width * 0.0025)
-    let stored = UserDefaults.standard.string(forKey: Self.stageDefaultsKey) ?? ""
-    self.stage = CanvasStage(rawValue: stored) ?? .void
+    self.annotations = annotations
+    if let raw = UserDefaults.standard.string(forKey: Self.toolDefaultsKey),
+       let storedTool = Tool(rawValue: raw)
+    {
+      self.tool = storedTool
+    }
+    if let raw = UserDefaults.standard.string(forKey: Self.colorDefaultsKey),
+       let storedColor = AnnotationColor(rawValue: raw)
+    {
+      self.activeColor = storedColor
+    }
+    let stroke: CGFloat
+    if let stored = UserDefaults.standard.object(forKey: Self.strokeDefaultsKey) as? Double {
+      stroke = min(28, max(1, CGFloat(stored)))
+    } else {
+      stroke = max(2.5, image.size.width * 0.0025)
+      UserDefaults.standard.set(Double(stroke), forKey: Self.strokeDefaultsKey)
+    }
+    self.strokeWidth = stroke
+    if let raw = UserDefaults.standard.string(forKey: Self.redactDefaultsKey),
+       let style = RedactStyle(rawValue: raw)
+    {
+      self.redactStyle = style
+    }
+    let storedStage = UserDefaults.standard.string(forKey: Self.stageDefaultsKey) ?? ""
+    self.stage = CanvasStage(rawValue: storedStage) ?? .void
+    self.statusMessage = status(for: tool)
+    if remembersSession {
+      persistSessionNow()
+    }
   }
 
   private static let stageDefaultsKey = "annotator.canvasStage"
+  private static let toolDefaultsKey = "annotator.tool"
+  private static let colorDefaultsKey = "annotator.activeColor"
+  private static let strokeDefaultsKey = "annotator.strokeWidth"
+  private static let redactDefaultsKey = "annotator.redactStyle"
 
   var selectedAnnotation: Annotation? {
     guard let selectedID else { return nil }
@@ -115,9 +175,19 @@ final class AppState: ObservableObject {
   }
 
   func nudgeStroke(_ delta: CGFloat) {
-    guard !isTyping else { return }
+    if isTyping {
+      textFont = min(160, max(11, textFont + delta * 7))
+      statusMessage = String(format: "Size %.0f pt", textFont)
+      return
+    }
     if let selectedID, let index = annotations.firstIndex(where: { $0.id == selectedID }) {
       pushHistory()
+      if case let .text(origin, width, fontSize, string) = annotations[index].kind {
+        let next = min(160, max(11, fontSize + delta * 7))
+        annotations[index].kind = .text(origin: origin, width: width, fontSize: next, string: string)
+        statusMessage = String(format: "Size %.0f pt", next)
+        return
+      }
       let next = min(28, max(1, annotations[index].strokeWidth + delta))
       annotations[index].strokeWidth = next
       statusMessage = String(format: "Stroke %.0f pt", next)
@@ -185,6 +255,27 @@ final class AppState: ObservableObject {
     statusMessage = status(for: tool)
   }
 
+  /// B stays the redact key. Pressing it again flips pixelate and blur.
+  func pressRedact() {
+    guard !isTyping else { return }
+    if tool == .redact {
+      redactStyle = redactStyle == .pixelate ? .blur : .pixelate
+      statusMessage = status(for: .redact)
+      return
+    }
+    selectTool(.redact)
+  }
+
+  func selectRedact(_ style: RedactStyle) {
+    redactStyle = style
+    if tool == .redact {
+      statusMessage = status(for: .redact)
+      draft = nil
+      return
+    }
+    selectTool(.redact)
+  }
+
   func beginPointer(at point: CGPoint, handleHitTolerance: CGFloat) {
     guard !isTyping else { return }
     lastPointer = point
@@ -197,6 +288,27 @@ final class AppState: ObservableObject {
         return
       }
       beginSelect(at: point, handleHitTolerance: handleHitTolerance)
+      return
+    }
+
+    if tool == .text {
+      if let selected = selectedAnnotation, case .text = selected.kind,
+         grabSelected(selected, at: point, handleHitTolerance: handleHitTolerance, allowMove: true)
+      {
+        return
+      }
+      if let hit = hitTest(point),
+         let annotation = annotations.first(where: { $0.id == hit }),
+         case .text = annotation.kind
+      {
+        selectedID = hit
+        if grabSelected(annotation, at: point, handleHitTolerance: handleHitTolerance, allowMove: true) {
+          return
+        }
+      }
+      selectedID = nil
+      draft = .textBox(origin: point, width: 0)
+      dragSession = .draw
       return
     }
 
@@ -252,10 +364,16 @@ final class AppState: ObservableObject {
     applyPointer(lastPointer)
   }
 
-  func endPointer(at point: CGPoint) {
+  func endPointer(at point: CGPoint, clickCount: Int = 1) {
     guard !isTyping else { return }
     lastPointer = point
 
+    if tool == .text, clickCount >= 2 {
+      draft = nil
+      dragSession = nil
+      handleDoubleClick(at: point)
+      return
+    }
     switch dragSession {
     case .move, .resize:
       dragSession = nil
@@ -295,13 +413,7 @@ final class AppState: ObservableObject {
     }
 
     guard tool == .text else { return }
-    selectedID = nil
-    editingID = nil
-    textOrigin = point
-    textDraft = ""
-    isTyping = true
-    draft = .textPlacement(point)
-    statusMessage = "Typing · Esc to finish · hotkeys paused"
+    beginText(at: point, width: defaultTextWidth, string: "", editing: nil)
   }
 
   func handleDoubleClick(at point: CGPoint) {
@@ -338,16 +450,24 @@ final class AppState: ObservableObject {
           annotations.remove(at: index)
           selectedID = nil
         } else {
-          annotations[index].kind = .text(origin: origin, string: text)
+          annotations[index].kind = .text(
+            origin: origin,
+            width: textWidth,
+            fontSize: textFont,
+            string: text
+          )
+          annotations[index].color = textColor
           selectedID = editingID
         }
       } else if !text.isEmpty {
         pushHistory()
-        annotations.append(Annotation(
-          kind: .text(origin: origin, string: text),
-          color: activeColor,
+        let annotation = Annotation(
+          kind: .text(origin: origin, width: textWidth, fontSize: textFont, string: text),
+          color: textColor,
           strokeWidth: strokeWidth
-        ))
+        )
+        annotations.append(annotation)
+        selectedID = annotation.id
       }
     }
     isTyping = false
@@ -420,6 +540,11 @@ final class AppState: ObservableObject {
 
   func pickToolFromPalette(_ tool: Tool) {
     selectTool(tool)
+    hideToolPalette()
+  }
+
+  func pickRedactFromPalette(_ style: RedactStyle) {
+    selectRedact(style)
     hideToolPalette()
   }
 
@@ -507,12 +632,14 @@ final class AppState: ObservableObject {
   func saveAndQuit() {
     guard !isTyping else { return }
     copyToClipboard()
+    persistSessionNow()
     cleanupTempFile()
     NSApp.terminate(nil)
   }
 
   func cancelAndQuit() {
     commitTextIfNeeded(cancel: true)
+    persistSessionNow()
     cleanupTempFile()
     NSApp.terminate(nil)
   }
@@ -620,7 +747,13 @@ final class AppState: ObservableObject {
       case var .path(points):
         points.append(point)
         draft = .path(points)
-      case .textPlacement, .none:
+      case let .textBox(origin, _):
+        let width = max(0, point.x - origin.x)
+        draft = .textBox(origin: origin, width: width)
+        statusMessage = width < 12
+          ? "Text · drag to set the width"
+          : String(format: "Text width %.0f", width)
+      case .none:
         break
       }
     case .none:
@@ -676,6 +809,10 @@ final class AppState: ObservableObject {
           statusMessage = "Curve · drag onto the line to straighten"
         } else if handle == .rectRadius {
           statusMessage = "Corner radius · drag onto the corner to square"
+        } else if handle == .textWidth {
+          statusMessage = "Width · drag"
+        } else if handle == .textScale {
+          statusMessage = "Scale · drag"
         } else {
           statusMessage = "Resizing · ⇧ constrain"
         }
@@ -703,6 +840,8 @@ final class AppState: ObservableObject {
       return "Rectangle · drag the top-edge dot to round"
     case .spotlight:
       return "Spotlight · drag handles to reshape"
+    case .text:
+      return "Text · drag the edge for width · corner scales · [ ] size"
     default:
       return "Selected · arrows nudge · ⌘D duplicate · ⌘[ ⌘] order"
     }
@@ -734,25 +873,55 @@ final class AppState: ObservableObject {
     }
     switch annotation.kind {
     case let .rectangle(rect, _), let .circle(rect), let .cross(rect), let .highlight(rect),
-         let .spotlight(rect), let .redact(rect):
+         let .spotlight(rect):
       let r = rect.normalized
       statusMessage = String(format: "%.0f × %.0f", r.width, r.height)
+    case let .redact(rect, _):
+      let r = rect.normalized
+      statusMessage = String(format: "%.0f × %.0f", r.width, r.height)
+    case let .text(_, width, fontSize, _):
+      if handle == .textScale {
+        statusMessage = String(format: "Size %.0f pt", fontSize)
+      } else {
+        statusMessage = String(format: "Width %.0f", width)
+      }
     default:
       break
     }
   }
 
   private func beginEditText(_ annotation: Annotation) {
-    guard case let .text(origin, string) = annotation.kind else { return }
+    guard case let .text(origin, width, fontSize, string) = annotation.kind else { return }
     selectedID = annotation.id
     editingID = annotation.id
     textOrigin = origin
+    textWidth = max(36, width)
+    textFont = fontSize
+    textColor = annotation.color
     textDraft = string
     isTyping = true
-    draft = .textPlacement(origin)
+    draft = nil
     dragSession = nil
     didPushForGesture = false
-    statusMessage = "Editing text · Esc to finish"
+    statusMessage = "Editing · drag the bar to reflow · [ ] size · Esc commits"
+  }
+
+  private func beginText(at origin: CGPoint, width: CGFloat, string: String, editing: UUID?) {
+    selectedID = editing
+    editingID = editing
+    textOrigin = origin
+    textWidth = max(36, width)
+    textFont = TextLayout.font(for: strokeWidth)
+    textColor = activeColor
+    textDraft = string
+    isTyping = true
+    draft = nil
+    dragSession = nil
+    statusMessage = "Type · drag the bar to set width · [ ] size · Esc commits"
+  }
+
+  private var defaultTextWidth: CGFloat {
+    min(max(180, image.size.width * 0.22), image.size.width * 0.46)
   }
 
   private func placeBadge(at point: CGPoint) {
@@ -846,7 +1015,7 @@ final class AppState: ObservableObject {
           case .cross: kind = .cross(rect)
           case .highlight: kind = .highlight(rect)
           case .spotlight: kind = .spotlight(rect)
-          case .redact: kind = .redact(rect)
+          case .redact: kind = .redact(rect, style: redactStyle)
           default: kind = .rectangle(rect, radius: 0)
           }
           let annotation = Annotation(kind: kind, color: activeColor, strokeWidth: strokeWidth)
@@ -872,8 +1041,18 @@ final class AppState: ObservableObject {
         pushHistory()
         annotations.append(Annotation(kind: .path(points), color: activeColor, strokeWidth: strokeWidth))
       }
-    case .textPlacement, .none:
+    case .none:
       break
+    case let .textBox(origin, width):
+      let box = width >= 24 ? width : defaultTextWidth
+      if width < 24, let hit = hitTest(point),
+         let annotation = annotations.first(where: { $0.id == hit }),
+         case .text = annotation.kind
+      {
+        beginEditText(annotation)
+      } else {
+        beginText(at: origin, width: box, string: "", editing: nil)
+      }
     }
     draft = nil
   }
@@ -953,7 +1132,7 @@ final class AppState: ObservableObject {
     case .select:
       return "Select · click · ⌥-click samples · arrows nudge · ⌘D duplicate"
     case .text:
-      return "Text · click to place · double-click to edit"
+      return "Text · drag a width, or click · edge reflows · corner scales"
     case .numbered:
       return "Numbers · click to place 1, 2, 3…"
     case .highlight:
@@ -961,7 +1140,12 @@ final class AppState: ObservableObject {
     case .spotlight:
       return "Spotlight · drag a hole · rest of the shot dims"
     case .redact:
-      return "Redact · drag to pixelate"
+      switch redactStyle {
+      case .pixelate:
+        return "Redact · pixelate · B switches to blur"
+      case .blur:
+        return "Redact · blur · B switches to pixelate"
+      }
     case .crop:
       return "Crop · drag a region · ⇧ square"
     case .slice:
@@ -985,5 +1169,26 @@ final class AppState: ObservableObject {
           imageURL.path.contains(FileManager.default.temporaryDirectory.path)
     else { return }
     try? FileManager.default.removeItem(at: imageURL)
+  }
+
+  private func schedulePersist() {
+    guard remembersSession, !persistScheduled else { return }
+    persistScheduled = true
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+      guard let self else { return }
+      self.persistScheduled = false
+      self.persistSessionNow()
+    }
+  }
+
+  private func persistSessionNow() {
+    guard remembersSession else { return }
+    if sessionImageDirty {
+      if let data = ClipboardService.pngData(image) {
+        try? data.write(to: AnnotatorFiles.lastShotURL, options: .atomic)
+      }
+      sessionImageDirty = false
+    }
+    LastSession.saveMarks(annotations)
   }
 }

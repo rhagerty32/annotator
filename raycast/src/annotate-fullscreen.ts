@@ -1,5 +1,5 @@
-import { launchAnnotator } from "./launch";
+import { launchFastCapture } from "./launch";
 
 export default async function Command() {
-  await launchAnnotator(["--capture", "--fullscreen"]);
+  await launchFastCapture({ fullscreen: true });
 }

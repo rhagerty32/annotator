@@ -85,7 +85,7 @@ Press **?** in the panel for the full cheat sheet. Hold **space** to see every t
 | **Space** | Hold: tool palette · tap a letter to pick |
 | **V R C A L D X T** | Select, rectangle, circle, arrow, line, draw, cross, text |
 | **H I N B K J** | Fill, spotlight, numbered steps, redact, crop, slice |
-| **1–0** | Colors |
+| **1–0 −** | Colors (− is black) |
 | **[ ]** | Stroke |
 | **⇧** | Constrain (square / 45°) |
 | **⌥** | Draw from center, or a headless line with **A** |

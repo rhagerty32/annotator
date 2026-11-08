@@ -1,4 +1,5 @@
 import AppKit
+import CaptureKit
 import SwiftUI
 
 /// Plain window so AppKit will not auto-dismiss on Escape / save-panel Cancel
@@ -46,7 +47,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       let loaded = Self.loadLaunchImage()
-      self.state = AppState(image: loaded.image, imageURL: loaded.url, cgImage: loaded.cgImage)
+      self.state = AppState(
+        image: loaded.image,
+        imageURL: loaded.url,
+        cgImage: loaded.cgImage,
+        annotations: loaded.annotations,
+        remembersSession: loaded.remembersSession
+      )
       self.installHotkeys()
       self.showPanel()
     }
@@ -319,6 +326,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       }
     }
 
+    if state.isTyping, let chars, let char = chars.first, char == "[" || char == "]" {
+      state.nudgeStroke(char == "[" ? -1 : 1)
+      return nil
+    }
+
     guard !state.isTyping else {
       return event
     }
@@ -359,7 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       state.selectTool(.numbered)
       return nil
     case "b":
-      state.selectTool(.redact)
+      state.pressRedact()
       return nil
     case "x":
       state.selectTool(.cross)
@@ -398,6 +410,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let image: NSImage
     let url: URL?
     var cgImage: CGImage?
+    var annotations: [Annotation] = []
+    var remembersSession = false
   }
 
   private static func loadLaunchImage() -> LoadedImage {
@@ -413,10 +427,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       if let image = ClipboardService.imageFromPasteboard(),
          let loaded = ShotLoader.load(nsImage: image)
       {
-        return LoadedImage(image: loaded.image, url: nil, cgImage: loaded.cgImage)
+        return LoadedImage(image: loaded.image, url: nil, cgImage: loaded.cgImage, remembersSession: true)
       }
       fputs("Annotator: no image on the clipboard.\n", stderr)
       exit(1)
+    }
+
+    if args.contains("--reopen") {
+      guard let session = LastSession.load() else {
+        fputs("Annotator: no last shot.\n", stderr)
+        exit(1)
+      }
+      let loaded = ShotLoader.load(nsImage: session.image)
+      return LoadedImage(
+        image: session.image,
+        url: nil,
+        cgImage: loaded?.cgImage,
+        annotations: session.annotations,
+        remembersSession: true
+      )
     }
 
     if args.contains("--capture") {
@@ -428,7 +457,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       ),
          let loaded = ShotLoader.load(url: url)
       {
-        return LoadedImage(image: loaded.image, url: url, cgImage: loaded.cgImage)
+        return LoadedImage(image: loaded.image, url: url, cgImage: loaded.cgImage, remembersSession: true)
       }
       fputs("Annotator: capture cancelled or failed.\n", stderr)
       exit(1)
@@ -439,8 +468,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     {
       let path = args[args.index(after: pathIndex)]
       let url = URL(fileURLWithPath: path)
+      if args.contains("--wait") {
+        guard CaptureRunner.waitForImage(at: url, timeout: 180) else {
+          exit(0)
+        }
+      }
       if let loaded = ShotLoader.load(url: url) {
-        return LoadedImage(image: loaded.image, url: url, cgImage: loaded.cgImage)
+        return LoadedImage(image: loaded.image, url: url, cgImage: loaded.cgImage, remembersSession: true)
       }
       fputs("Annotator: could not load image at \(path)\n", stderr)
       exit(1)
@@ -451,7 +485,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       if !path.hasPrefix("-") {
         let url = URL(fileURLWithPath: path)
         if let loaded = ShotLoader.load(url: url) {
-          return LoadedImage(image: loaded.image, url: url, cgImage: loaded.cgImage)
+          return LoadedImage(image: loaded.image, url: url, cgImage: loaded.cgImage, remembersSession: true)
         }
       }
     }

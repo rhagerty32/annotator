@@ -66,8 +66,8 @@ struct AnnotationOverlay: View {
       context.fill(Path(r), with: .color(color.opacity(0.38)))
     case .spotlight:
       break
-    case let .redact(rect):
-      drawRedact(rect.normalized, canvasSize: canvasSize, in: &context)
+    case let .redact(rect, style):
+      drawRedact(rect.normalized, style: style, canvasSize: canvasSize, in: &context)
     case let .arrow(start, end, control, headed):
       strokeArrow(
         from: start,
@@ -81,10 +81,18 @@ struct AnnotationOverlay: View {
     case let .path(points):
       guard let path = path(from: points) else { return }
       strokeHalo(path, color: color, width: stroke, in: &context, cap: .round, join: .round)
-    case let .text(origin, string):
-      let font = Font.system(size: max(14, stroke * 7), weight: .semibold)
-      let ink = context.resolve(Text(string).font(font).foregroundStyle(color))
-      context.draw(ink, at: origin, anchor: .topLeading)
+    case let .text(origin, width, fontSize, string):
+      let layout = TextLayout.measure(string: string, fontSize: fontSize, width: max(36, width))
+      var y = origin.y
+      for line in layout.lines {
+        if !line.isEmpty {
+          let ink = context.resolve(
+            Text(line).font(.system(size: fontSize, weight: .semibold)).foregroundStyle(color)
+          )
+          context.draw(ink, at: CGPoint(x: origin.x, y: y), anchor: .topLeading)
+        }
+        y += layout.lineHeight
+      }
     case let .badge(origin, index):
       drawBadge(at: origin, index: index, color: color, stroke: stroke, in: &context)
     }
@@ -166,9 +174,15 @@ struct AnnotationOverlay: View {
     case let .path(points):
       guard let path = path(from: points) else { return }
       strokeHalo(path, color: color, width: stroke, in: &context, cap: .round, join: .round)
-    case let .textPlacement(origin):
-      let marker = Path(ellipseIn: CGRect(x: origin.x - 3, y: origin.y - 3, width: 6, height: 6))
-      context.fill(marker, with: .color(color))
+    case let .textBox(origin, width):
+      let fontSize = max(13, draftWidth * 7)
+      let line = TextLayout.measure(string: "", fontSize: fontSize, width: max(width, 8)).lineHeight
+      let rect = CGRect(x: origin.x, y: origin.y, width: max(width, 2), height: line)
+      context.stroke(
+        Path(rect),
+        with: .color(color.opacity(0.9)),
+        style: StrokeStyle(lineWidth: 1.25, dash: [5, 3])
+      )
     case let .slice(start, current, axis):
       drawSliceDraft(start: start, current: current, axis: axis, canvasSize: canvasSize, in: &context)
     }
@@ -253,7 +267,12 @@ struct AnnotationOverlay: View {
     )
   }
 
-  private func drawRedact(_ rect: CGRect, canvasSize: CGSize, in context: inout GraphicsContext) {
+  private func drawRedact(
+    _ rect: CGRect,
+    style: RedactStyle,
+    canvasSize: CGSize,
+    in context: inout GraphicsContext
+  ) {
     guard let sourceImage, imageSize.width > 0, imageSize.height > 0 else {
       context.fill(Path(rect), with: .color(.black.opacity(0.55)))
       return
@@ -264,8 +283,11 @@ struct AnnotationOverlay: View {
       width: rect.width / canvasSize.width * imageSize.width,
       height: rect.height / canvasSize.height * imageSize.height
     )
-    if let mosaic = PixelateService.mosaic(source: sourceImage, imageRect: imageRect) {
-      let resolved = context.resolve(Image(nsImage: mosaic).resizable())
+    let painted: NSImage? = style == .blur
+      ? PixelateService.blur(source: sourceImage, imageRect: imageRect)
+      : PixelateService.mosaic(source: sourceImage, imageRect: imageRect)
+    if let painted {
+      let resolved = context.resolve(Image(nsImage: painted).resizable())
       context.draw(resolved, in: rect)
     } else {
       context.fill(Path(rect), with: .color(.black.opacity(0.55)))
@@ -310,6 +332,10 @@ struct AnnotationOverlay: View {
         let rect = CGRect(x: point.x - size / 2, y: point.y - size / 2, width: size, height: size)
         context.fill(Path(ellipseIn: rect), with: .color(.white))
         context.stroke(Path(ellipseIn: rect), with: .color(selectionColor), lineWidth: 1.5)
+      } else if handle == .textWidth {
+        let rect = CGRect(x: point.x - 3, y: point.y - 9, width: 6, height: 18)
+        context.fill(Path(roundedRect: rect, cornerRadius: 3), with: .color(.white))
+        context.stroke(Path(roundedRect: rect, cornerRadius: 3), with: .color(selectionColor), lineWidth: 1.5)
       } else {
         let size: CGFloat = 8
         let rect = CGRect(x: point.x - size / 2, y: point.y - size / 2, width: size, height: size)

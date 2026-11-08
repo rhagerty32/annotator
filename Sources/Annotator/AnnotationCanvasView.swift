@@ -3,7 +3,6 @@ import SwiftUI
 
 struct AnnotationCanvasView: View {
   @ObservedObject var state: AppState
-  @FocusState private var textFocused: Bool
   @State private var inputMonitor: Any?
   @State private var panDragOrigin: CGSize?
 
@@ -17,7 +16,6 @@ struct AnnotationCanvasView: View {
       )
       let displayed = transform.displayed
       let scale = displayed.width / max(state.image.size.width, 1)
-      let stroke = max(1, state.strokeWidth * scale)
 
       ZStack(alignment: .topLeading) {
         CanvasStageBackground(stage: state.stage, canvasSize: geo.size)
@@ -64,17 +62,36 @@ struct AnnotationCanvasView: View {
 
         if state.isTyping, let origin = state.textOrigin {
           let displayOrigin = transform.toCanvas(origin)
-          TextField("", text: $state.textDraft)
-            .textFieldStyle(.plain)
-            .font(.system(size: max(14, stroke * 7), weight: .semibold))
-            .foregroundStyle(state.activeColor.swatch)
-            .padding(6)
-            .background(Color.black.opacity(0.55))
-            .cornerRadius(4)
-            .frame(width: max(140, displayed.width * 0.35), alignment: .leading)
-            .offset(x: displayOrigin.x, y: displayOrigin.y)
-            .focused($textFocused)
-            .onSubmit { state.commitTextIfNeeded(cancel: false) }
+          let boxWidth = max(48, state.textWidth * scale)
+          let fontSize = max(11, state.textFont * scale)
+          let measured = TextLayout.measure(
+            string: state.textDraft,
+            fontSize: fontSize,
+            width: boxWidth
+          )
+          let boxHeight = min(360, max(measured.height + 4, fontSize * 1.35))
+          let chrome = textChrome(state.textColor)
+          HStack(alignment: .top, spacing: 0) {
+            TextBoxEditor(
+              text: $state.textDraft,
+              fontSize: fontSize,
+              color: NSColor(state.textColor.swatch)
+            )
+            .frame(width: boxWidth, height: boxHeight)
+            TextWidthHandle(color: chrome.border) {
+              state.textWidth = max(36, state.textWidth + $0 / max(scale, 0.01))
+              state.statusMessage = String(format: "Width %.0f", state.textWidth)
+            }
+          }
+          .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+              .fill(chrome.fill)
+          )
+          .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+              .strokeBorder(chrome.border, lineWidth: 1.5)
+          )
+          .offset(x: displayOrigin.x, y: displayOrigin.y)
         }
       }
       .frame(width: geo.size.width, height: geo.size.height)
@@ -90,9 +107,6 @@ struct AnnotationCanvasView: View {
         }
       }
       .gesture(dragGesture())
-      .onChange(of: state.isTyping) { _, typing in
-        textFocused = typing
-      }
       .onChange(of: state.spaceHeld) { _, held in
         if held, !state.isTyping {
           NSCursor.openHand.set()
@@ -122,10 +136,20 @@ struct AnnotationCanvasView: View {
     }
   }
 
+  private func textChrome(_ color: AnnotationColor) -> (fill: Color, border: Color) {
+    switch color {
+    case .white, .yellow, .cyan, .mint:
+      return (Color.black.opacity(0.78), color.swatch)
+    default:
+      return (Color.white.opacity(0.94), color.swatch)
+    }
+  }
+
   private func dragGesture() -> some Gesture {
     DragGesture(minimumDistance: 0, coordinateSpace: .local)
       .onChanged { value in
         state.lastCanvasPoint = value.location
+        if state.isTyping { return }
 
         if state.spaceHeld {
           if panDragOrigin == nil {
@@ -157,6 +181,21 @@ struct AnnotationCanvasView: View {
       }
       .onEnded { value in
         state.lastCanvasPoint = value.location
+        if state.isTyping, let origin = state.textOrigin {
+          let transform = state.canvasTransform()
+          let boxOrigin = transform.toCanvas(origin)
+          let scale = transform.displayed.width / max(state.image.size.width, 1)
+          let box = CGRect(
+            x: boxOrigin.x - 8,
+            y: boxOrigin.y - 8,
+            width: state.textWidth * scale + 28,
+            height: 420
+          )
+          if !box.contains(value.location) {
+            state.commitTextIfNeeded(cancel: false)
+          }
+          return
+        }
 
         if panDragOrigin != nil {
           panDragOrigin = nil
@@ -189,7 +228,7 @@ struct AnnotationCanvasView: View {
           return
         }
 
-        state.endPointer(at: imagePoint)
+        state.endPointer(at: imagePoint, clickCount: clicks)
       }
   }
 
@@ -250,8 +289,12 @@ struct AnnotationCanvasView: View {
       )
     case let .path(points):
       return .path(points.map { imageToView($0, imageSize: imageSize, viewSize: viewSize) })
-    case let .textPlacement(origin):
-      return .textPlacement(imageToView(origin, imageSize: imageSize, viewSize: viewSize))
+    case let .textBox(origin, width):
+      let scaleX = viewSize.width / max(imageSize.width, 1)
+      return .textBox(
+        origin: imageToView(origin, imageSize: imageSize, viewSize: viewSize),
+        width: width * scaleX
+      )
     case let .slice(start, current, axis):
       return .slice(
         start: imageToView(start, imageSize: imageSize, viewSize: viewSize),
@@ -276,8 +319,8 @@ struct AnnotationCanvasView: View {
       return .highlight(scale(rect: rect.normalized, from: imageSize, to: viewSize))
     case let .spotlight(rect):
       return .spotlight(scale(rect: rect.normalized, from: imageSize, to: viewSize))
-    case let .redact(rect):
-      return .redact(scale(rect: rect.normalized, from: imageSize, to: viewSize))
+    case let .redact(rect, style):
+      return .redact(scale(rect: rect.normalized, from: imageSize, to: viewSize), style: style)
     case let .arrow(start, end, control, headed):
       return .arrow(
         start: imageToView(start, imageSize: imageSize, viewSize: viewSize),
@@ -287,9 +330,13 @@ struct AnnotationCanvasView: View {
       )
     case let .path(points):
       return .path(points.map { imageToView($0, imageSize: imageSize, viewSize: viewSize) })
-    case let .text(origin, string):
+    case let .text(origin, width, fontSize, string):
+      let scaleX = viewSize.width / max(imageSize.width, 1)
+      let scaleY = viewSize.height / max(imageSize.height, 1)
       return .text(
         origin: imageToView(origin, imageSize: imageSize, viewSize: viewSize),
+        width: width * scaleX,
+        fontSize: fontSize * min(scaleX, scaleY),
         string: string
       )
     case let .badge(origin, index):
@@ -366,5 +413,119 @@ private struct CheckerboardBackground: View {
       }
     }
     .allowsHitTesting(false)
+  }
+}
+
+/// Multiline text box with no extra insets, so the glyphs line up with the mark.
+private struct TextBoxEditor: NSViewRepresentable {
+  @Binding var text: String
+  var fontSize: CGFloat
+  var color: NSColor
+
+  func makeCoordinator() -> Coordinator {
+    Coordinator(text: $text)
+  }
+
+  func makeNSView(context: Context) -> NSScrollView {
+    let scroll = NSTextView.scrollableTextView()
+    scroll.drawsBackground = false
+    scroll.hasVerticalScroller = false
+    scroll.hasHorizontalScroller = false
+    scroll.borderType = .noBorder
+    scroll.autohidesScrollers = true
+
+    let textView = scroll.documentView as! NSTextView
+    textView.isRichText = false
+    textView.importsGraphics = false
+    textView.allowsUndo = true
+    textView.drawsBackground = false
+    textView.focusRingType = .none
+    textView.isAutomaticQuoteSubstitutionEnabled = false
+    textView.isAutomaticDashSubstitutionEnabled = false
+    textView.isAutomaticTextReplacementEnabled = false
+    textView.textContainerInset = NSSize(width: 0, height: 2)
+    textView.textContainer?.lineFragmentPadding = 0
+    textView.textContainer?.widthTracksTextView = true
+    textView.isHorizontallyResizable = false
+    textView.isVerticallyResizable = true
+    textView.font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+    textView.textColor = color
+    textView.insertionPointColor = color
+    textView.string = text
+    textView.delegate = context.coordinator
+    context.coordinator.textView = textView
+
+    DispatchQueue.main.async {
+      textView.window?.makeFirstResponder(textView)
+    }
+    return scroll
+  }
+
+  func updateNSView(_ scroll: NSScrollView, context: Context) {
+    guard let textView = scroll.documentView as? NSTextView else { return }
+    if textView.string != text {
+      let selected = textView.selectedRange()
+      textView.string = text
+      let length = (text as NSString).length
+      textView.setSelectedRange(NSRange(location: min(selected.location, length), length: 0))
+    }
+    let font = NSFont.systemFont(ofSize: fontSize, weight: .semibold)
+    if textView.font != font { textView.font = font }
+    if textView.textColor != color {
+      textView.textColor = color
+      textView.insertionPointColor = color
+    }
+  }
+
+  final class Coordinator: NSObject, NSTextViewDelegate {
+    @Binding var text: String
+    weak var textView: NSTextView?
+
+    init(text: Binding<String>) {
+      _text = text
+    }
+
+    func textDidChange(_ notification: Notification) {
+      guard let textView = notification.object as? NSTextView else { return }
+      if text != textView.string {
+        text = textView.string
+      }
+    }
+  }
+}
+
+/// Right-edge grip. Dragging changes the wrap width while typing.
+private struct TextWidthHandle: View {
+  var color: Color
+  var onDrag: (CGFloat) -> Void
+
+  @State private var origin: CGFloat?
+
+  var body: some View {
+    RoundedRectangle(cornerRadius: 2, style: .continuous)
+      .fill(color)
+      .frame(width: 7)
+      .padding(.vertical, 6)
+      .padding(.trailing, 4)
+      .contentShape(Rectangle())
+      .onHover { hovering in
+        if hovering {
+          NSCursor.resizeLeftRight.set()
+        } else {
+          NSCursor.arrow.set()
+        }
+      }
+      .highPriorityGesture(
+        DragGesture(minimumDistance: 1)
+          .onChanged { value in
+            let previous = origin ?? 0
+            onDrag(value.translation.width - previous)
+            origin = value.translation.width
+          }
+          .onEnded { _ in
+            origin = nil
+          }
+      )
+      .help("Drag to change the wrap width")
   }
 }

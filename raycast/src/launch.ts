@@ -7,8 +7,8 @@ import {
 } from "@raycast/api";
 import { spawn } from "child_process";
 import { accessSync, constants } from "fs";
-import { homedir } from "os";
-import { join } from "path";
+import { homedir, tmpdir } from "os";
+import { dirname, join } from "path";
 
 interface Preferences {
   annotatorPath?: string;
@@ -41,6 +41,69 @@ export async function launchAnnotator(
 ): Promise<number | null> {
   const result = await runAnnotator(args, options);
   return result?.code ?? null;
+}
+
+export interface FastCapture {
+  window?: boolean;
+  fullscreen?: boolean;
+  repeat?: boolean;
+  delay?: number;
+}
+
+/**
+ * Start screencapture before Raycast closes and before the editor loads.
+ * The editor process boots in parallel and opens the PNG when the drag ends.
+ */
+export async function launchFastCapture(flags: FastCapture = {}): Promise<void> {
+  const { annotatorPath } = getPreferenceValues<Preferences>();
+  const binary = resolveBinary(annotatorPath);
+  if (!binary) {
+    await showToast({
+      style: Toast.Style.Failure,
+      title: "Annotator binary not found",
+      message: "Build with `npm run build:annotator` and set the preference path.",
+    });
+    return;
+  }
+
+  const capture = join(dirname(binary), "Capture");
+  let captureReady = false;
+  try {
+    accessSync(capture, constants.X_OK);
+    captureReady = true;
+  } catch {
+    captureReady = false;
+  }
+
+  if (!captureReady) {
+    const args = ["--capture"];
+    if (flags.window) args.push("--window");
+    if (flags.fullscreen) args.push("--fullscreen");
+    if (flags.repeat) args.push("--repeat");
+    if (flags.delay) args.push("--delay", String(flags.delay));
+    await launchAnnotator(args);
+    return;
+  }
+
+  const png = join(tmpdir(), `annotator-${process.pid}-${Date.now()}.png`);
+  const captureArgs = ["--out", png];
+  if (flags.window) captureArgs.push("--window");
+  if (flags.fullscreen) captureArgs.push("--fullscreen");
+  if (flags.repeat) captureArgs.push("--repeat");
+  if (flags.delay) captureArgs.push("--delay", String(flags.delay));
+
+  const grab = spawn(capture, captureArgs, { detached: true, stdio: "ignore" });
+  grab.unref();
+  const editor = spawn(binary, ["--image", png, "--wait"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  editor.unref();
+
+  await closeMainWindow({
+    clearRootSearch: true,
+    popToRootType: PopToRootType.Immediate,
+  });
 }
 
 export async function runAnnotator(

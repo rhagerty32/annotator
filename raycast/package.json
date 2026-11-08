@@ -49,6 +49,12 @@
       "title": "Annotate Last Region",
       "description": "Recapture the last region without the crosshair, then annotate.",
       "mode": "no-view"
+    },
+    {
+      "name": "reopen",
+      "title": "Reopen Last Shot",
+      "description": "Open the last screenshot and its marks again.",
+      "mode": "no-view"
     }
   ],
   "preferences": [

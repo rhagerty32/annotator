@@ -3,7 +3,9 @@ import SwiftUI
 
 struct ToolPaletteOverlay: View {
   let active: Tool
+  let redactStyle: RedactStyle
   let onPick: (Tool) -> Void
+  let onRedact: (RedactStyle) -> Void
   let onDismiss: () -> Void
 
   private let accent = Color.accentColor
@@ -48,15 +50,16 @@ struct ToolPaletteOverlay: View {
             .textCase(.uppercase)
             .tracking(0.7)
           LazyVGrid(columns: layout.columns, alignment: .leading, spacing: layout.gap) {
-            ForEach(group.tools) { tool in
+            ForEach(entries(in: group)) { entry in
               PaletteCard(
-                tool: tool,
-                active: active == tool,
+                keyLabel: entry.key,
+                symbol: entry.symbol,
+                title: entry.title,
+                active: entry.active,
                 accent: accent,
-                layout: layout
-              ) {
-                onPick(tool)
-              }
+                layout: layout,
+                action: entry.action
+              )
             }
           }
         }
@@ -71,6 +74,47 @@ struct ToolPaletteOverlay: View {
     .shadow(color: .black.opacity(0.22), radius: 28, y: 14)
     .onTapGesture {}
   }
+
+  private func entries(in group: ToolPaletteGroup) -> [PaletteEntry] {
+    group.tools.flatMap { tool in
+      if tool == .redact {
+        return [
+          PaletteEntry(
+            id: "pixelate",
+            key: "B",
+            symbol: RedactStyle.pixelate.symbolName,
+            title: "Pixelate",
+            active: active == .redact && redactStyle == .pixelate
+          ) { onRedact(.pixelate) },
+          PaletteEntry(
+            id: "blur",
+            key: "B",
+            symbol: RedactStyle.blur.symbolName,
+            title: "Blur",
+            active: active == .redact && redactStyle == .blur
+          ) { onRedact(.blur) },
+        ]
+      }
+      return [
+        PaletteEntry(
+          id: tool.id,
+          key: tool.hotkey.uppercased(),
+          symbol: tool.symbolName,
+          title: tool.label,
+          active: active == tool
+        ) { onPick(tool) },
+      ]
+    }
+  }
+}
+
+private struct PaletteEntry: Identifiable {
+  let id: String
+  let key: String
+  let symbol: String
+  let title: String
+  let active: Bool
+  let action: () -> Void
 }
 
 private struct PaletteLayout {
@@ -111,26 +155,62 @@ private struct PaletteLayout {
 }
 
 private struct PaletteCard: View {
-  let tool: Tool
+  let keyLabel: String
+  let symbol: String
+  let title: String
   let active: Bool
   let accent: Color
   let layout: PaletteLayout
   let action: () -> Void
+
+  init(
+    tool: Tool,
+    active: Bool,
+    accent: Color,
+    layout: PaletteLayout,
+    action: @escaping () -> Void
+  ) {
+    self.keyLabel = tool.hotkey.uppercased()
+    self.symbol = tool.symbolName
+    self.title = tool.label
+    self.active = active
+    self.accent = accent
+    self.layout = layout
+    self.action = action
+  }
+
+  init(
+    keyLabel: String,
+    symbol: String,
+    title: String,
+    active: Bool,
+    accent: Color,
+    layout: PaletteLayout,
+    action: @escaping () -> Void
+  ) {
+    self.keyLabel = keyLabel
+    self.symbol = symbol
+    self.title = title
+    self.active = active
+    self.accent = accent
+    self.layout = layout
+    self.action = action
+  }
 
   @State private var hovering = false
 
   var body: some View {
     Button(action: action) {
       VStack(spacing: 4) {
-        Text(tool.hotkey.uppercased())
+        Text(keyLabel)
           .font(.system(size: layout.keySize, weight: .bold, design: .monospaced))
           .foregroundStyle(active ? accent : Color.primary)
           .minimumScaleFactor(0.6)
           .lineLimit(1)
-        Image(systemName: tool.symbolName)
+        Image(systemName: symbol)
           .font(.system(size: layout.iconSize, weight: .semibold))
           .foregroundStyle(active ? accent : Color.primary)
-        Text(tool.label)
+        Text(title)
           .font(.system(size: layout.labelSize, weight: .medium))
           .foregroundStyle(active ? accent : Color.secondary)
           .lineLimit(1)

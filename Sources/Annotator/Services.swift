@@ -1,4 +1,5 @@
 import AppKit
+import CaptureKit
 import CoreImage
 import ImageIO
 import SwiftUI
@@ -59,8 +60,6 @@ enum ShotLoader {
 }
 
 enum CaptureService {
-  private static let lastRectKey = "annotator.lastCaptureRect"
-
   /// Interactive region, window, full display, or the last saved rect.
   static func capture(
     window: Bool = false,
@@ -71,125 +70,15 @@ enum CaptureService {
   ) -> URL? {
     let url = FileManager.default.temporaryDirectory
       .appendingPathComponent("annotator-\(UUID().uuidString).png")
-
-    if delaySeconds > 0 {
-      Thread.sleep(forTimeInterval: TimeInterval(delaySeconds))
-    }
-
-    if repeatLast {
-      if let rect = storedRect() {
-        return run(["-x", "-R", rectString(rect), url.path], to: url) ? url : nil
-      }
-    }
-
-    if fullScreen {
-      let screen = screenUnderMouse()
-      let quartz = quartzRect(screen.frame)
-      store(quartz)
-      return run(["-x", "-R", rectString(quartz), url.path], to: url) ? url : nil
-    }
-
-    if window {
-      return run(["-x", "-w", url.path], to: url) ? url : nil
-    }
-
-    // Interactive region: show the picker immediately. Last-region storage
-    // comes from the drag rect (no full-screen snapshot + pixel hunt).
-    let tracker: DragRectTracker? = locateRegion ? DragRectTracker() : nil
-    tracker?.start()
-    defer { tracker?.stop() }
-
-    guard run(["-x", "-i", url.path], to: url, pump: locateRegion) else {
-      return nil
-    }
-    if let cocoa = tracker?.rect {
-      store(quartzRect(cocoa))
-    }
-    return url
-  }
-
-  private static func run(_ args: [String], to url: URL, pump: Bool = false) -> Bool {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-    process.arguments = args
-    do {
-      try process.run()
-      if pump {
-        while process.isRunning {
-          RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.03))
-        }
-      } else {
-        process.waitUntilExit()
-      }
-    } catch {
-      return false
-    }
-    return process.terminationStatus == 0 && FileManager.default.fileExists(atPath: url.path)
-  }
-
-  private static func screenUnderMouse() -> NSScreen {
-    let mouse = NSEvent.mouseLocation
-    return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
-      ?? NSScreen.main
-      ?? NSScreen.screens[0]
-  }
-
-  private static func quartzRect(_ cocoa: CGRect) -> CGRect {
-    let top = NSScreen.screens.map(\.frame.maxY).max() ?? cocoa.maxY
-    return CGRect(x: cocoa.minX, y: top - cocoa.maxY, width: cocoa.width, height: cocoa.height)
-  }
-
-  private static func rectString(_ rect: CGRect) -> String {
-    "\(Int(rect.minX.rounded())),\(Int(rect.minY.rounded())),\(Int(rect.width.rounded())),\(Int(rect.height.rounded()))"
-  }
-
-  private static func store(_ rect: CGRect) {
-    UserDefaults.standard.set(rectString(rect), forKey: lastRectKey)
-  }
-
-  private static func storedRect() -> CGRect? {
-    guard let raw = UserDefaults.standard.string(forKey: lastRectKey) else { return nil }
-    let parts = raw.split(separator: ",").compactMap { Double($0) }
-    guard parts.count == 4 else { return nil }
-    return CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
-  }
-}
-
-/// Records the interactive `screencapture -i` drag in screen space so we can
-/// store last-region without a full-display snapshot + brute-force search.
-private final class DragRectTracker {
-  private var monitor: Any?
-  private var down: CGPoint?
-  private(set) var rect: CGRect?
-
-  func start() {
-    down = nil
-    rect = nil
-    monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { [weak self] event in
-      guard let self else { return }
-      let point = NSEvent.mouseLocation
-      if event.type == .leftMouseDown {
-        self.down = point
-        return
-      }
-      guard event.type == .leftMouseUp, let down = self.down else { return }
-      let r = CGRect(
-        x: min(down.x, point.x),
-        y: min(down.y, point.y),
-        width: abs(point.x - down.x),
-        height: abs(point.y - down.y)
-      )
-      if r.width >= 8, r.height >= 8 {
-        self.rect = r
-      }
-    }
-  }
-
-  func stop() {
-    if let monitor {
-      NSEvent.removeMonitor(monitor)
-    }
-    monitor = nil
+    let ok = CaptureRunner.capture(
+      window: window,
+      delaySeconds: delaySeconds,
+      fullScreen: fullScreen,
+      repeatLast: repeatLast,
+      locateRegion: locateRegion,
+      output: url
+    )
+    return ok ? url : nil
   }
 }
 
@@ -514,6 +403,47 @@ enum PixelateService {
 
     let extent = input.extent
     guard let outCG = ciContext.createCGImage(output, from: extent) else { return nil }
+    return NSImage(cgImage: outCG, size: NSSize(width: r.width, height: r.height))
+  }
+
+  /// Soft blur of `imageRect`. Clamped first so the edges don't fade to clear.
+  static func blur(source: NSImage, imageRect: CGRect) -> NSImage? {
+    let r = imageRect.normalized
+    guard r.width > 1, r.height > 1, source.size.width > 0 else { return nil }
+
+    var proposed = CGRect(origin: .zero, size: source.size)
+    guard let cg = source.cgImage(forProposedRect: &proposed, context: nil, hints: nil) else {
+      return nil
+    }
+
+    let scaleX = CGFloat(cg.width) / source.size.width
+    let scaleY = CGFloat(cg.height) / source.size.height
+    let pixelRect = CGRect(
+      x: r.minX * scaleX,
+      y: r.minY * scaleY,
+      width: r.width * scaleX,
+      height: r.height * scaleY
+    ).integral
+
+    guard pixelRect.width > 1, pixelRect.height > 1,
+          let cropped = cg.cropping(to: pixelRect)
+    else {
+      return nil
+    }
+
+    let input = CIImage(cgImage: cropped)
+    guard let clamp = CIFilter(name: "CIAffineClamp") else { return nil }
+    clamp.setValue(input, forKey: kCIInputImageKey)
+    clamp.setValue(CGAffineTransform.identity, forKey: "inputTransform")
+    guard let clamped = clamp.outputImage else { return nil }
+
+    guard let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
+    filter.setValue(clamped, forKey: kCIInputImageKey)
+    let radius = max(8, min(pixelRect.width, pixelRect.height) / 12)
+    filter.setValue(radius, forKey: kCIInputRadiusKey)
+    guard let output = filter.outputImage?.cropped(to: input.extent) else { return nil }
+
+    guard let outCG = ciContext.createCGImage(output, from: input.extent) else { return nil }
     return NSImage(cgImage: outCG, size: NSSize(width: r.width, height: r.height))
   }
 }
