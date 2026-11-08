@@ -1,8 +1,73 @@
 # Annotator
 
-A macOS screenshot annotator. Raycast (or the terminal) grabs a region, a floating panel opens, you mark it up with hotkeys, and **S** copies it to the clipboard.
+**Capture a screen region on macOS, mark it up with keyboard shortcuts, and copy a PNG to your clipboard** — with an optional Raycast workflow and on-device OCR for “copy text from screen.”
 
-There is also a **Copy Text from Screen** command: same region picker, then on-device OCR, then the words land on the clipboard. No editor.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/rhagerty32/annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/rhagerty32/annotator/actions/workflows/ci.yml)
+
+<!-- Replace with a short screen recording or screenshot of the annotation panel -->
+<p align="center">
+  <img src="raycast/assets/icon.png" alt="Annotator icon (replace with app screenshot)" width="128" />
+  <br />
+  <em>Add a GIF or screenshot of the floating editor here when you have one.</em>
+</p>
+
+## Features
+
+- **Region, window, or full-screen capture** via Raycast commands or CLI flags (`screencapture` under the hood).
+- **Floating annotation panel** — accessory app with no Dock icon; **S** copies compressed PNG and quits, **Esc** cancels.
+- **Keyboard-driven tools** — shapes, arrows, draw, text, spotlight, redact, crop, numbered steps, and more (press **?** in the panel for the cheat sheet).
+- **Copy text from screen** — same region picker, on-device Vision OCR, results to the clipboard without opening the editor.
+- **Reopen last shot** — restores the previous capture and mark-up where supported.
+- **Raycast extension** in `raycast/` — hotkey-friendly commands that launch the locally built binary.
+
+## Install
+
+You need **macOS 14+**, [Swift](https://swift.org) (Xcode or Command Line Tools), **Node.js**, and optionally [Raycast](https://www.raycast.com).
+
+```bash
+git clone https://github.com/rhagerty32/annotator.git
+cd annotator
+npm --prefix raycast install
+./reload-raycast.sh
+```
+
+That builds the app, builds the Raycast extension, and restarts Raycast if it is installed.
+
+Then in Raycast:
+
+1. Command Palette → **Import Extension**
+2. Choose the `raycast` folder inside this repo (not `dist`)
+3. Optional: extension preferences → **Annotator binary** →  
+   `/absolute/path/to/annotator/.build/release/Annotator`  
+   (usually auto-detected after a build)
+
+Grant **Screen Recording** permission when macOS prompts `screencapture`.
+
+### After a git pull
+
+Raycast caches the old extension until you rebuild and bounce it.
+
+```bash
+git pull
+./reload-raycast.sh
+```
+
+## Build from source
+
+```bash
+npm run build:annotator          # swift build -c release
+npm --prefix raycast run build   # Raycast extension only
+./reload-raycast.sh              # both + Raycast restart
+```
+
+Binaries: `.build/release/Annotator` and `.build/release/Capture`.
+
+Quick try without Raycast:
+
+```bash
+npm run annotate
+```
 
 ## How it works
 
@@ -13,43 +78,11 @@ There is also a **Copy Text from Screen** command: same region picker, then on-d
 
 Copy Text skips the panel: capture → read pixels with Vision → HUD → clipboard.
 
-## Install
-
-You need macOS 14+, [Swift](https://swift.org) (Xcode or Command Line Tools), Node.js, and [Raycast](https://www.raycast.com).
-
-```bash
-git clone <this-repo> annotator
-cd annotator
-npm --prefix raycast install
-./reload-raycast.sh
-```
-
-That builds the app, builds the Raycast extension, and restarts Raycast.
-
-Then in Raycast:
-
-1. Command Palette → **Import Extension**
-2. Choose the `raycast` folder inside this repo (not `dist`)
-3. Optional: extension preferences → **Annotator binary** →  
-   `/absolute/path/to/annotator/.build/release/Annotator`  
-   (usually auto-detected after a build)
-
-Give macOS Screen Recording permission when `screencapture` asks.
-
-## After a git pull
-
-Raycast caches the old extension until you rebuild and bounce it.
-
-```bash
-git pull
-./reload-raycast.sh
-```
-
-## Ways to use it
+## Usage
 
 ### Raycast
 
-Bind hotkeys to whichever you actually use.
+Bind hotkeys to whichever commands you use.
 
 | Command | What it does |
 |---|---|
@@ -60,6 +93,7 @@ Bind hotkeys to whichever you actually use.
 | **Annotate in 3s** | Wait 3 seconds, then region capture (menus that vanish) |
 | **Annotate Clipboard** | Open whatever image is already on the clipboard |
 | **Copy Text from Screen** | Region capture → OCR → clipboard. Edit after you paste. |
+| **Reopen Last Shot** | Open the last screenshot and its marks again |
 
 ### Terminal
 
@@ -76,7 +110,7 @@ npm run annotate                          # region, then editor
 .build/release/Annotator shot.png
 ```
 
-## Annotating
+### Annotating
 
 Press **?** in the panel for the full cheat sheet. Hold **space** to see every tool, then tap its letter. Space types normally while a text field is active.
 
@@ -97,7 +131,7 @@ Press **?** in the panel for the full cheat sheet. Hold **space** to see every t
 
 Drag an arrow’s midpoint to curve it. Drag a rectangle’s top-edge dot to round the corners. **⌘,** opens canvas settings (void, chrome, checker).
 
-## Copy Text from Screen
+### Copy text from screen
 
 Same region picker as annotate. After you release, a small HUD reads the pixels. When it says **Copied**, paste wherever you already were. Esc in the picker cancels.
 
@@ -105,6 +139,15 @@ Same region picker as annotate. After you release, a small HUD reads the pixels.
 
 ```
 Sources/Annotator/   Swift app (panel, tools, OCR)
+Sources/CaptureKit/  Shared capture helpers + Capture CLI
 raycast/             Raycast extension (launches the binary)
 reload-raycast.sh    Build both + restart Raycast
 ```
+
+## Contributing
+
+We welcome issues and pull requests. See [CONTRIBUTING.md](CONTRIBUTING.md) for build steps, branch flow, and code style. Please read our [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+[MIT](LICENSE) © Ryan Hagerty
