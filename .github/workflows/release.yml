@@ -35,6 +35,17 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
 
+      - name: Seed the Sparkle binary artifact cache
+        run: |
+          # Xcode 16.4 on macos-15 fails a cold download of this GitHub release
+          # zip with "already exists in file system". SwiftPM copies a zip that
+          # is already in the artifact cache instead of downloading it.
+          # Kept inline so a re-run that checks out an older tag still has it.
+          cache="${HOME}/Library/Caches/org.swift.swiftpm/artifacts"
+          mkdir -p "${cache}"
+          curl -fsSL -o "${cache}/https___github_com_sparkle_project_Sparkle_releases_download_2_7_1_Sparkle_for_Swift_Package_Manager_zip" \
+            "https://github.com/sparkle-project/Sparkle/releases/download/2.7.1/Sparkle-for-Swift-Package-Manager.zip"
+
       - name: Build, sign the update zip, and write the appcast
         id: build
         env:
