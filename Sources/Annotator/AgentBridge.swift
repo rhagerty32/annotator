@@ -54,6 +54,10 @@ enum AgentBridge {
       fputs("protocol self-test: --capture did not parse\n", stderr)
       return 1
     }
+    if LaunchRequest.parse(["AnnotatorBin", "--settings", "--annotator-handoff"]) != .settings {
+      fputs("protocol self-test: handoff flag changed --settings\n", stderr)
+      return 1
+    }
     if LaunchRequest.parse(["Annotator", "-psn_0_1"]) != .agent {
       fputs("protocol self-test: Finder -psn_ did not parse as agent\n", stderr)
       return 1

@@ -2,6 +2,10 @@ import Foundation
 
 /// What a process was asked to do. Empty arguments start the menu bar agent.
 enum LaunchRequest: Equatable {
+  /// Passed to a relaunch so a process that is still not CFBundleExecutable
+  /// exits instead of opening the app again.
+  static let handoffArgument = "--annotator-handoff"
+
   case agent
   case activate
   case settings
@@ -23,7 +27,9 @@ enum LaunchRequest: Equatable {
     // binary can be that executable. A second Mach-O exec'd by a launcher is
     // not the bundle's signed executable, and macOS 26 MenuBarAgent then
     // refuses the status-item scene.
-    let rest = arguments.dropFirst().filter { !$0.hasPrefix("-psn_") }
+    let rest = arguments.dropFirst().filter {
+      !$0.hasPrefix("-psn_") && $0 != handoffArgument
+    }
     if rest.isEmpty || Array(rest) == ["--agent"] {
       return .agent
     }

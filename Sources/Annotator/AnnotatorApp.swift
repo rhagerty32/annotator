@@ -579,15 +579,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     case .ocr:
       deliverToTerminal(performOCR(), ocr: true)
     case .settings:
+      // Same path as a normal launch. startAgent() alone never listens, so
+      // the caller would time out and this process would stay up as an orphan.
       if !BundleExecutable.isBundleExecutable {
         handOffToBundleExecutable(.settings)
       }
-      startAgent(presentSettings: true)
+      becomeAgentOrExit(presentSettings: true)
     case .agent, .activate, .updates:
       if !BundleExecutable.isBundleExecutable {
         handOffToBundleExecutable(request)
       }
-      startAgent(presentSettings: false)
+      becomeAgentOrExit(presentSettings: false)
     default:
       let reply = openEditor(for: request)
       if panel == nil {
@@ -739,7 +741,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   /// request over the agent socket, and exit. A second hop is refused so a
   /// wrong image cannot relaunch itself forever.
   private func handOffToBundleExecutable(_ request: LaunchRequest) -> Never {
-    if ProcessInfo.processInfo.environment["ANNOTATOR_HANDOFF"] == "1" {
+    if CommandLine.arguments.contains(LaunchRequest.handoffArgument) {
       let running = BundleExecutable.currentPath
       let expected = BundleExecutable.bundleExecutablePath
       fputs("Annotator: refusing to relaunch again from \(running) (bundle executable is \(expected))\n", stderr)
@@ -752,15 +754,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       fputs("Annotator: install Annotator.app to run the menu bar agent.\n", stderr)
       exit(1)
     }
-    guard openBundleApplication(at: appURL, arguments: request.forwardingArguments) else {
+    var arguments = request.forwardingArguments
+    arguments.append(LaunchRequest.handoffArgument)
+    guard openBundleApplication(at: appURL, arguments: arguments) else {
       exit(1)
     }
+    // Keep pumping after open returns. Thread.sleep would freeze Launch
+    // Services delivery, and the new agent does not wait for this process
+    // to exit before it listens.
     let deadline = Date().addingTimeInterval(15)
     while Date() < deadline {
       if let reply = AgentBridge.send(request) {
         deliverToTerminal(reply, ocr: request.isOCR)
       }
-      Thread.sleep(forTimeInterval: 0.05)
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
     }
     fputs("Annotator: the menu bar app did not start.\n", stderr)
     exit(1)
@@ -780,10 +787,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     configuration.promptsUserIfNeeded = false
     // AnnotatorBin is inside the bundle, so Launch Services already counts this
     // process as the running app. A new instance is what execs CFBundleExecutable.
+    // It inherits this environment and does not wait for us to exit.
     configuration.createsNewApplicationInstance = true
-    var environment = ProcessInfo.processInfo.environment
-    environment["ANNOTATOR_HANDOFF"] = "1"
-    configuration.environment = environment
     let box = OpenResultBox()
     let group = DispatchGroup()
     group.enter()
@@ -797,7 +802,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         fputs("Annotator: timed out opening \(url.path)\n", stderr)
         return false
       }
-      RunLoop.current.run(mode: .common, before: Date(timeIntervalSinceNow: 0.05))
+      // .common is kCFRunLoopCommonModes, which CFRunLoopRunSpecific rejects.
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
     }
     if let error = box.error {
       fputs("Annotator: could not open \(url.path): \(error.localizedDescription)\n", stderr)
