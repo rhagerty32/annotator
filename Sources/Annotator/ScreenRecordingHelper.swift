@@ -1,9 +1,11 @@
 import AppKit
 import AppKitShims
+import ApplicationServices
 import CaptureKit
 import CoreGraphics
 import Foundation
 import SwiftUI
+import Vision
 
 /// Screen Recording is tied to the ad-hoc signature, so an update leaves the
 /// old switch on and the new build without access. This helper walks through
@@ -264,19 +266,31 @@ enum ScreenRecordingHelper {
     }
     window.displayIfNeeded()
     window.contentView?.layoutSubtreeIfNeeded()
-    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.2))
-    let shown = collectedStrings(in: window.contentView)
+    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.4))
+    let shown = interfaceStrings(in: window)
     for phrase in ["One quick update", "Open Screen Recording Settings", "Remind me later", "Remove the old Annotator"] {
-      if !shown.contains(where: { $0.contains(phrase) }) {
+      if !shown.contains(where: { $0.localizedCaseInsensitiveContains(phrase) }) {
         fputs("screen recording self-test: missing \(phrase)\n\(shown.joined(separator: "\n"))\n", stderr)
         return 1
       }
     }
-    if let rep = bitmap(of: window.contentView) {
-      let url = directory.appendingPathComponent("window-light.png")
-      if let data = rep.representation(using: .png, properties: [:]) {
-        try? data.write(to: url)
-      }
+    guard let rep = bitmap(of: window.contentView),
+          let data = rep.representation(using: .png, properties: [:])
+    else {
+      fputs("screen recording self-test: could not draw the open window\n", stderr)
+      return 1
+    }
+    let windowURL = directory.appendingPathComponent("window-light.png")
+    do {
+      try data.write(to: windowURL, options: .atomic)
+      try requireText(["One quick update", "Open Screen Recording Settings", "Remind me later"], in: windowURL)
+      try requireText(["One quick update", "Remind me later"], in: directory.appendingPathComponent("initial-light.png"))
+      try requireText(["One quick update", "Remind me later"], in: directory.appendingPathComponent("initial-dark.png"))
+      try requireText(["Open Settings again", "Waiting for permission"], in: directory.appendingPathComponent("waiting.png"))
+      try requireText(["All set", "Restart Annotator", "Permission granted"], in: directory.appendingPathComponent("success.png"))
+    } catch {
+      fputs("screen recording self-test: \(error.localizedDescription)\n", stderr)
+      return 1
     }
     close()
     if model.isPolling {
@@ -341,25 +355,86 @@ enum ScreenRecordingHelper {
     return rep
   }
 
-  private static func collectedStrings(in view: NSView?) -> [String] {
-    guard let view else { return [] }
+  /// SwiftUI draws `Text` in its own layer. Those words are not `NSTextField`
+  /// subviews, so a subview walk cannot see a title that is on screen.
+  /// VoiceOver reads the accessibility tree, and the PNG is what was painted.
+  private static func interfaceStrings(in window: NSWindow) -> [String] {
     var values: [String] = []
-    if let text = view as? NSTextField {
-      values.append(text.stringValue)
+    if let content = window.contentView {
+      var seen = Set<ObjectIdentifier>()
+      func visit(_ object: NSObject) {
+        if !seen.insert(ObjectIdentifier(object)).inserted { return }
+        if let label = object.accessibilityLabel(), !label.isEmpty {
+          values.append(label)
+        }
+        if let value = object.accessibilityValue() as? String, !value.isEmpty {
+          values.append(value)
+        }
+        if let text = object as? NSTextField, !text.stringValue.isEmpty {
+          values.append(text.stringValue)
+        }
+        if let button = object as? NSButton, !button.title.isEmpty {
+          values.append(button.title)
+        }
+        for child in object.accessibilityChildren() ?? [] {
+          if let child = child as? NSObject {
+            visit(child)
+          }
+        }
+        if let view = object as? NSView {
+          for subview in view.subviews {
+            visit(subview)
+          }
+        }
+      }
+      visit(content)
     }
-    if let button = view as? NSButton {
-      values.append(button.title)
+    let application = AXUIElementCreateApplication(getpid())
+    values.append(contentsOf: axStrings(application, depth: 0))
+    return values
+  }
+
+  private static func axStrings(_ element: AXUIElement, depth: Int) -> [String] {
+    if depth > 12 { return [] }
+    var values: [String] = []
+    for attribute in [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute] {
+      var copy: CFTypeRef?
+      if AXUIElementCopyAttributeValue(element, attribute as CFString, &copy) == .success,
+         let text = copy as? String,
+         !text.isEmpty {
+        values.append(text)
+      }
     }
-    if let label = view.accessibilityLabel() {
-      values.append(label)
+    var children: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success else {
+      return values
     }
-    if let value = view.accessibilityValue() as? String {
-      values.append(value)
-    }
-    for subview in view.subviews {
-      values.append(contentsOf: collectedStrings(in: subview))
+    let list = children as? [AXUIElement] ?? []
+    for child in list {
+      values.append(contentsOf: axStrings(child, depth: depth + 1))
     }
     return values
+  }
+
+  private static func requireText(_ phrases: [String], in url: URL) throws {
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate
+    request.usesLanguageCorrection = false
+    let handler = VNImageRequestHandler(url: url, options: [:])
+    try handler.perform([request])
+    let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+    let text = lines.joined(separator: "\n")
+    let folded = text.replacingOccurrences(of: " ", with: "").lowercased()
+    for phrase in phrases {
+      let needle = phrase.replacingOccurrences(of: " ", with: "").lowercased()
+      if !folded.contains(needle) {
+        throw NSError(
+          domain: "Annotator",
+          code: 2,
+          userInfo: [NSLocalizedDescriptionKey: "\(url.lastPathComponent) does not show \(phrase)\n\(text)"]
+        )
+      }
+    }
   }
 
   private static func present(model: ScreenRecordingHelperModel) {
@@ -547,6 +622,8 @@ struct ScreenRecordingHelperView: View {
           .font(screenFont(20, weight: .bold))
           .tracking(-0.44)
           .foregroundStyle(palette.text)
+          .accessibilityAddTraits(.isHeader)
+          .accessibilityLabel("One quick update")
         Text("Annotator needs permission to see your screen again after the update.")
           .font(screenFont(15, weight: .regular))
           .tracking(-0.15)
@@ -555,7 +632,6 @@ struct ScreenRecordingHelperView: View {
       }
     }
     .padding(.bottom, 24)
-    .accessibilityElement(children: .combine)
   }
 
   private var stepOne: some View {
@@ -644,19 +720,17 @@ struct ScreenRecordingHelperView: View {
               .font(screenFont(13, weight: .medium))
               .tracking(-0.13)
               .foregroundStyle(palette.text)
-            Spacer(minLength: 0)
-            ZStack {
-              toggleGlyph(.mid)
-              RoundedRectangle(cornerRadius: 999, style: .continuous)
-                .stroke(palette.blue, lineWidth: 2)
-                .padding(-6)
-                .allowsHitTesting(false)
-            }
-            .overlay(alignment: .trailing) {
-              hitArrow(direction: .left)
-                .offset(x: 26)
-            }
-            .padding(.trailing, 18)
+            Spacer(minLength: 8)
+            toggleGlyph(.mid)
+              .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                  .stroke(palette.blue, lineWidth: 2)
+                  .frame(width: 46, height: 32)
+                  .allowsHitTesting(false)
+              }
+              .frame(width: 34, height: 20)
+            hitArrow(direction: .left)
+              .frame(width: 18, height: 18)
           }
           .padding(.horizontal, 10)
           .frame(minHeight: 38)
