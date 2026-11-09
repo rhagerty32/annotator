@@ -73,7 +73,7 @@ jobs:
           sparkle_zip="${artifact_cache}/https___github_com_sparkle_project_Sparkle_releases_download_2_7_1_Sparkle_for_Swift_Package_Manager_zip"
           seed_sparkle() {
             mkdir -p "${artifact_cache}"
-            curl -fsSL -o "${sparkle_zip}" \
+            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o "${sparkle_zip}" \
               "https://github.com/sparkle-project/Sparkle/releases/download/2.7.1/Sparkle-for-Swift-Package-Manager.zip"
           }
           clear_artifacts() {
@@ -82,7 +82,13 @@ jobs:
           log="$(mktemp)"
           status=1
           for attempt in 1 2 3; do
-            seed_sparkle
+            if ! seed_sparkle; then
+              echo "Sparkle zip download failed (attempt ${attempt})."
+              if [[ "${attempt}" -eq 3 ]]; then
+                exit 1
+              fi
+              continue
+            fi
             set +e
             bash scripts/publish-release.sh 2>&1 | tee "${log}"
             status="${PIPESTATUS[0]}"
