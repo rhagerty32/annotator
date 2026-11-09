@@ -1,4 +1,6 @@
 import AppKit
+import AppKitShims
+import CaptureKit
 import CoreGraphics
 import SwiftUI
 
@@ -17,7 +19,7 @@ enum ScreenRecordingPrompt {
 
   static var currentVersion: String {
     let short = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)?
-      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
     if let short, !short.isEmpty { return short }
     return "dev"
   }
@@ -59,7 +61,7 @@ enum ScreenRecordingPrompt {
     guard let data = try? Data(contentsOf: url),
           let text = String(data: data, encoding: .utf8)
     else { return nil }
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmed = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
     return trimmed.isEmpty ? nil : trimmed
   }
 
