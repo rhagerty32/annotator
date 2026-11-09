@@ -22,6 +22,17 @@ enum AnnotatorMain {
     if CommandLine.arguments.contains("--ui-self-test") {
       exit(runUISelfTest())
     }
+    if let index = CommandLine.arguments.firstIndex(of: "--screen-recording-self-test") {
+      let next = CommandLine.arguments.index(after: index)
+      let directory: URL
+      if next < CommandLine.arguments.endIndex, !CommandLine.arguments[next].hasPrefix("-") {
+        directory = URL(fileURLWithPath: CommandLine.arguments[next], isDirectory: true)
+      } else {
+        directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+          .appendingPathComponent("screen-recording", isDirectory: true)
+      }
+      exit(ScreenRecordingHelper.runSelfTest(directory: directory))
+    }
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
@@ -571,13 +582,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       AgentPreferences.didPresentSettings = true
       SettingsWindow.show()
     }
+    DispatchQueue.main.async {
+      MainActor.assumeIsolated {
+        ScreenRecordingHelper.show(reason: .launch)
+      }
+    }
   }
 
   private func runOneShot(_ request: LaunchRequest) {
     agentMode = false
     switch request {
     case .ocr:
-      deliverToTerminal(performOCR(), ocr: true)
+      finishOneShot(performOCR(), ocr: true)
     case .settings:
       // Same path as a normal launch. startAgent() alone never listens, so
       // the caller would time out and this process would stay up as an orphan.
@@ -593,7 +609,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     default:
       let reply = openEditor(for: request)
       if panel == nil {
-        deliverToTerminal(reply, ocr: false)
+        finishOneShot(reply, ocr: false)
       }
     }
   }
@@ -810,6 +826,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       return false
     }
     return true
+  }
+
+  private func finishOneShot(_ reply: AgentReply, ocr: Bool) {
+    if ScreenRecordingHelper.isOpen {
+      ScreenRecordingHelper.onDismiss = { [weak self] in
+        guard let self, !self.agentMode, self.panel == nil else { return }
+        NSApp.terminate(nil)
+      }
+      return
+    }
+    deliverToTerminal(reply, ocr: ocr)
   }
 
   private func deliverToTerminal(_ reply: AgentReply, ocr: Bool) -> Never {

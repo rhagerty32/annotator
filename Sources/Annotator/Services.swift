@@ -68,6 +68,20 @@ enum CaptureService {
     repeatLast: Bool = false,
     locateRegion: Bool = true
   ) -> URL? {
+    if !ScreenRecordingPrompt.hasAccess() {
+      if Thread.isMainThread {
+        MainActor.assumeIsolated {
+          ScreenRecordingHelper.show(reason: .capture)
+        }
+      } else {
+        DispatchQueue.main.sync {
+          MainActor.assumeIsolated {
+            ScreenRecordingHelper.show(reason: .capture)
+          }
+        }
+      }
+      return nil
+    }
     let url = FileManager.default.temporaryDirectory
       .appendingPathComponent("annotator-\(UUID().uuidString).png")
     let ok = CaptureRunner.capture(

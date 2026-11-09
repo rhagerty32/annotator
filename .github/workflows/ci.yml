@@ -259,3 +259,18 @@ jobs:
               sys.exit("status item scene activation failed")
           print("no scene activation failed for Annotator")
           PY
+          mkdir -p dist/screen-recording
+          dist/Annotator.app/Contents/MacOS/Annotator --screen-recording-self-test dist/screen-recording
+          test -s dist/screen-recording/initial-light.png
+          test -s dist/screen-recording/initial-dark.png
+          test -s dist/screen-recording/waiting.png
+          test -s dist/screen-recording/success.png
+          test -s dist/screen-recording/window-light.png
+
+      - name: Upload Screen Recording helper screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-recording-helper
+          path: dist/screen-recording/*.png
+          if-no-files-found: ignore
