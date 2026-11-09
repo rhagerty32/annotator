@@ -54,8 +54,52 @@ enum AgentBridge {
       fputs("protocol self-test: --capture did not parse\n", stderr)
       return 1
     }
+    if LaunchRequest.parse(["AnnotatorBin", "--settings", "--annotator-handoff"]) != .settings {
+      fputs("protocol self-test: handoff flag changed --settings\n", stderr)
+      return 1
+    }
     if LaunchRequest.parse(["Annotator", "-psn_0_1"]) != .agent {
       fputs("protocol self-test: Finder -psn_ did not parse as agent\n", stderr)
+      return 1
+    }
+    let roundTrips: [LaunchRequest] = [
+      .agent,
+      .settings,
+      .updates,
+      .activate,
+      .ocr,
+      .clipboard,
+      .reopen,
+      .capture(CaptureOptions(window: true, fullScreen: false, repeatLast: true, delay: 3)),
+      .image(path: "/tmp/shot.png", wait: true),
+      .file(path: "/tmp/shot.png"),
+    ]
+    for sample in roundTrips {
+      let parsed = LaunchRequest.parse(["Annotator"] + sample.forwardingArguments)
+      if parsed != sample {
+        fputs("protocol self-test: \(String(describing: sample)) did not round trip\n", stderr)
+        return 1
+      }
+    }
+    if Bundle.main.bundleURL.pathExtension == "app" {
+      let name = BundleExecutable.currentURL.lastPathComponent
+      if name == "AnnotatorBin"
+        && (BundleExecutable.isBundleExecutable
+          || !BundleExecutable.bundleExecutablePath.hasSuffix("/Contents/MacOS/Annotator")) {
+        fputs(
+          "protocol self-test: CFBundleExecutable resolved to \(BundleExecutable.bundleExecutablePath)\n",
+          stderr
+        )
+        return 1
+      }
+      if name == "Annotator" && !BundleExecutable.isBundleExecutable {
+        let running = BundleExecutable.currentPath
+        let expected = BundleExecutable.bundleExecutablePath
+        fputs("protocol self-test: bundle executable was not recognized (\(running) vs \(expected))\n", stderr)
+        return 1
+      }
+    } else if BundleExecutable.isBundleExecutable {
+      fputs("protocol self-test: a non-bundle path was treated as the agent executable\n", stderr)
       return 1
     }
 

@@ -37,7 +37,6 @@ DIST = ROOT / "dist" / "Annotator.dmg"
 ICNS = ROOT / "assets" / "icon" / "AppIcon.icns"
 TIFF = ROOT / "assets" / "dmg" / "background.tiff"
 INFO = ROOT / "packaging" / "Info.plist"
-LAUNCHER_SRC = ROOT / "packaging" / "AnnotatorLauncher.c"
 
 WINDOW_BOUNDS = "{{200, 120}, {720, 440}}"
 ICON_POSITIONS = {
@@ -93,7 +92,7 @@ def strip_code_signature(path: Path) -> None:
     path.write_bytes(data)
 
 
-def stage_app(stage: Path, launcher: Path, binary: Path) -> Path:
+def stage_app(stage: Path, binary: Path) -> Path:
     app = stage / "Annotator.app"
     macos = app / "Contents" / "MacOS"
     resources = app / "Contents" / "Resources"
@@ -101,9 +100,13 @@ def stage_app(stage: Path, launcher: Path, binary: Path) -> Path:
     resources.mkdir(parents=True)
     write_info(app / "Contents" / "Info.plist")
     shutil.copyfile(ICNS, resources / "AppIcon.icns")
-    shutil.copyfile(launcher, macos / "Annotator")
-    shutil.copyfile(binary, macos / "AnnotatorBin")
+    # CFBundleExecutable must be this binary. A launcher that execs a second
+    # Mach-O makes MenuBarAgent reject the status-item scene on macOS 26.
+    shutil.copyfile(binary, macos / "Annotator")
     os.chmod(macos / "Annotator", 0o755)
+    # Same image under the old name so `AnnotatorBin --settings` still runs it.
+    # That process opens this app and exits. It must not stay up as the agent.
+    shutil.copyfile(binary, macos / "AnnotatorBin")
     os.chmod(macos / "AnnotatorBin", 0o755)
     background = stage / ".background"
     background.mkdir()
@@ -301,8 +304,11 @@ def sign_app(app: Path) -> None:
         framework = app / "Contents" / "Frameworks" / "Sparkle.framework"
         if framework.exists():
             sign_sparkle(framework, identity)
+        # Both names are the same Swift binary and must share the bundle identifier.
+        # A launcher signed as local.annotator.launcher does not match the bundle
+        # MenuBarAgent resolves for the status item.
+        sign_item(app / "Contents" / "MacOS" / "Annotator", identity, identifier="local.annotator")
         sign_item(app / "Contents" / "MacOS" / "AnnotatorBin", identity, identifier="local.annotator")
-        sign_item(app / "Contents" / "MacOS" / "Annotator", identity, identifier="local.annotator.launcher")
         sign_item(app, identity, identifier="local.annotator")
         if identity == "-":
             print(
@@ -437,23 +443,20 @@ def parse_stat(text: str) -> dict[str, str]:
     return values
 
 
-def locate_binaries(work: Path) -> tuple[Path, Path]:
+def locate_swift_binary(work: Path) -> Path:
     built = ROOT / ".build" / "release" / "Annotator"
-    launcher_env = os.environ.get("ANNOTATOR_LAUNCHER")
     binary_env = os.environ.get("ANNOTATOR_BIN")
-    if launcher_env and binary_env:
-        return Path(launcher_env), Path(binary_env)
+    if binary_env:
+        return Path(binary_env)
     if sys.platform == "darwin" and shutil.which("swift"):
         run(["swift", "build", "-c", "release"], cwd=ROOT)
-        launcher = work / "Annotator"
-        run(["clang", "-O2", "-o", str(launcher), str(LAUNCHER_SRC)])
-        return launcher, built
+        return built
     if not DIST.is_file():
-        raise SystemExit("No dist/Annotator.dmg and no swift build. Cannot find AnnotatorBin.")
+        raise SystemExit("No dist/Annotator.dmg and no swift build. Cannot find the app binary.")
     extract = work / "previous"
     extract.mkdir()
     # The Applications drop link is an absolute symlink. 7z refuses to
-    # extract that path, and we only need the two Mach-O files here.
+    # extract that path, and we only need the Mach-O here.
     run(
         [
             "7z",
@@ -465,11 +468,13 @@ def locate_binaries(work: Path) -> tuple[Path, Path]:
             "-x!*/Applications",
         ]
     )
-    launcher = next(extract.rglob("MacOS/Annotator"), None)
+    # Older images keep the Swift binary at AnnotatorBin and a C launcher at Annotator.
     binary = next(extract.rglob("MacOS/AnnotatorBin"), None)
-    if launcher is None or binary is None or not launcher.is_file() or not binary.is_file():
-        raise SystemExit(f"Previous disk image did not contain the app binaries in {extract}")
-    return launcher, binary
+    if binary is None or not binary.is_file():
+        binary = next(extract.rglob("MacOS/Annotator"), None)
+    if binary is None or not binary.is_file():
+        raise SystemExit(f"Previous disk image did not contain the app binary in {extract}")
+    return binary
 
 
 def build_macos(stage: Path, output: Path) -> None:
@@ -581,14 +586,15 @@ def main() -> None:
     generate_icons()
     with tempfile.TemporaryDirectory(prefix="annotator-dmg-") as tmp:
         work = Path(tmp)
-        launcher, binary = locate_binaries(work)
+        binary = locate_swift_binary(work)
         stage = work / "stage"
         stage.mkdir()
-        app = stage_app(stage, launcher, binary)
+        app = stage_app(stage, binary)
         embed_sparkle(app)
-        binary_in_app = app / "Contents" / "MacOS" / "AnnotatorBin"
-        ensure_framework_rpath(binary_in_app)
-        assert_links_sparkle(binary_in_app)
+        for name in ("Annotator", "AnnotatorBin"):
+            binary_in_app = app / "Contents" / "MacOS" / name
+            ensure_framework_rpath(binary_in_app)
+            assert_links_sparkle(binary_in_app)
         sign_app(app)
         if sys.platform == "darwin" and signing_identity() != "-" and notarization_env() is not None:
             notarize(app)

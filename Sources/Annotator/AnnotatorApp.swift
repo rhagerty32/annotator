@@ -22,6 +22,17 @@ enum AnnotatorMain {
     if CommandLine.arguments.contains("--ui-self-test") {
       exit(runUISelfTest())
     }
+    if let index = CommandLine.arguments.firstIndex(of: "--screen-recording-self-test") {
+      let next = CommandLine.arguments.index(after: index)
+      let directory: URL
+      if next < CommandLine.arguments.endIndex, !CommandLine.arguments[next].hasPrefix("-") {
+        directory = URL(fileURLWithPath: CommandLine.arguments[next], isDirectory: true)
+      } else {
+        directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+          .appendingPathComponent("screen-recording", isDirectory: true)
+      }
+      exit(ScreenRecordingHelper.runSelfTest(directory: directory))
+    }
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
@@ -61,11 +72,28 @@ enum AnnotatorMain {
 
   @MainActor
   private static func exercisePackagedUI() -> Int32 {
+    // MenuBarAgent on the CI runner does not reject a foreign image, so a
+    // passing AnnotatorBin status item is not evidence. Compare with the
+    // Info.plist executable. Bundle.main.executableURL follows whichever
+    // Mach-O was launched, so it matches AnnotatorBin when that binary runs.
+    let running = BundleExecutable.currentPath
+    let expected = BundleExecutable.bundleExecutablePath
+    if running != expected {
+      fputs(
+        "ui self-test: agent executable \(running) != bundle executable \(expected)\n",
+        stderr
+      )
+      return 1
+    }
     // Same order as the agent: status item first, then Settings. An exception
     // from setCollectionBehavior fails this test instead of skipping the icon.
     MenuBarController.shared.install()
-    if !MenuBarController.shared.hasVisibleContent {
-      fputs("ui self-test: status item has no image or title\n", stderr)
+    let placed = Date().addingTimeInterval(2)
+    while Date() < placed && !MenuBarController.shared.hasPlacedButton {
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    }
+    if !MenuBarController.shared.hasVisibleContent || !MenuBarController.shared.hasPlacedButton {
+      fputs("ui self-test: status item button has no window or a zero frame\n", stderr)
       return 1
     }
     if !SettingsWindow.show() {
@@ -82,6 +110,23 @@ enum AnnotatorMain {
 
 private final class UITestBox: @unchecked Sendable {
   var code: Int32 = 1
+}
+
+private final class OpenResultBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stored: Error?
+
+  func store(_ error: Error?) {
+    lock.lock()
+    stored = error
+    lock.unlock()
+  }
+
+  var error: Error? {
+    lock.lock()
+    defer { lock.unlock() }
+    return stored
+  }
 }
 
 private final class OCRResultBox: @unchecked Sendable {
@@ -459,6 +504,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   private func becomeAgentOrExit(presentSettings: Bool) {
+    if !BundleExecutable.isBundleExecutable {
+      // Opening the app with no capture flags brings Settings forward,
+      // except for a login item, which only starts the agent.
+      handOffToBundleExecutable(presentSettings ? .settings : .agent)
+    }
     if let reply = AgentBridge.send(.settings) {
       if !reply.ok, let error = reply.error, !error.isEmpty {
         fputs("Annotator: \(error)\n", stderr)
@@ -489,6 +539,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   private func startAgent(presentSettings: Bool) {
+    if !BundleExecutable.isBundleExecutable {
+      let running = BundleExecutable.currentPath
+      let expected = BundleExecutable.bundleExecutablePath
+      fputs("Annotator: refusing to run the menu bar agent as \(running) (bundle executable is \(expected))\n", stderr)
+      exit(1)
+    }
     agentMode = true
     MenuBarController.shared.onCapture = { action in
       DispatchQueue.main.async {
@@ -508,12 +564,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     MenuBarController.shared.onQuit = {
       NSApp.terminate(nil)
     }
-    // Install before Settings. A throw while presenting the window must not
-    // skip the status item or leave this function before the item exists.
+    // One status item, before Settings. A second install() calls reveal()
+    // again and asks MenuBarAgent for another scene.
     MenuBarController.shared.install()
-    DispatchQueue.main.async {
-      MenuBarController.shared.install()
-    }
     HotkeyCenter.shared.onFire = { action in
       DispatchQueue.main.async {
         MainActor.assumeIsolated {
@@ -529,21 +582,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       AgentPreferences.didPresentSettings = true
       SettingsWindow.show()
     }
+    DispatchQueue.main.async {
+      MainActor.assumeIsolated {
+        ScreenRecordingHelper.show(reason: .launch)
+      }
+    }
   }
 
   private func runOneShot(_ request: LaunchRequest) {
     agentMode = false
     switch request {
     case .ocr:
-      deliverToTerminal(performOCR(), ocr: true)
+      finishOneShot(performOCR(), ocr: true)
     case .settings:
-      startAgent(presentSettings: true)
+      // Same path as a normal launch. startAgent() alone never listens, so
+      // the caller would time out and this process would stay up as an orphan.
+      if !BundleExecutable.isBundleExecutable {
+        handOffToBundleExecutable(.settings)
+      }
+      becomeAgentOrExit(presentSettings: true)
     case .agent, .activate, .updates:
-      startAgent(presentSettings: false)
+      if !BundleExecutable.isBundleExecutable {
+        handOffToBundleExecutable(request)
+      }
+      becomeAgentOrExit(presentSettings: false)
     default:
       let reply = openEditor(for: request)
       if panel == nil {
-        deliverToTerminal(reply, ocr: false)
+        finishOneShot(reply, ocr: false)
       }
     }
   }
@@ -685,6 +751,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 1.05))
     hud.dismiss()
     return AgentReply(ok: false, code: 2, text: "", error: "No text found")
+  }
+
+  /// This process is not `CFBundleExecutable`. Start that binary, deliver the
+  /// request over the agent socket, and exit. A second hop is refused so a
+  /// wrong image cannot relaunch itself forever.
+  private func handOffToBundleExecutable(_ request: LaunchRequest) -> Never {
+    if CommandLine.arguments.contains(LaunchRequest.handoffArgument) {
+      let running = BundleExecutable.currentPath
+      let expected = BundleExecutable.bundleExecutablePath
+      fputs("Annotator: refusing to relaunch again from \(running) (bundle executable is \(expected))\n", stderr)
+      exit(1)
+    }
+    if let reply = AgentBridge.send(request) {
+      deliverToTerminal(reply, ocr: request.isOCR)
+    }
+    guard let appURL = bundleApplicationURL() else {
+      fputs("Annotator: install Annotator.app to run the menu bar agent.\n", stderr)
+      exit(1)
+    }
+    var arguments = request.forwardingArguments
+    arguments.append(LaunchRequest.handoffArgument)
+    guard openBundleApplication(at: appURL, arguments: arguments) else {
+      exit(1)
+    }
+    // Keep pumping after open returns. Thread.sleep would freeze Launch
+    // Services delivery, and the new agent does not wait for this process
+    // to exit before it listens.
+    let deadline = Date().addingTimeInterval(15)
+    while Date() < deadline {
+      if let reply = AgentBridge.send(request) {
+        deliverToTerminal(reply, ocr: request.isOCR)
+      }
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    }
+    fputs("Annotator: the menu bar app did not start.\n", stderr)
+    exit(1)
+  }
+
+  private func bundleApplicationURL() -> URL? {
+    if let bundled = BundleExecutable.applicationURL {
+      return bundled
+    }
+    return NSWorkspace.shared.urlForApplication(withBundleIdentifier: "local.annotator")
+  }
+
+  private func openBundleApplication(at url: URL, arguments: [String]) -> Bool {
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.arguments = arguments
+    configuration.activates = true
+    configuration.promptsUserIfNeeded = false
+    // AnnotatorBin is inside the bundle, so Launch Services already counts this
+    // process as the running app. A new instance is what execs CFBundleExecutable.
+    // It inherits this environment and does not wait for us to exit.
+    configuration.createsNewApplicationInstance = true
+    let box = OpenResultBox()
+    let group = DispatchGroup()
+    group.enter()
+    NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, error in
+      box.store(error)
+      group.leave()
+    }
+    let deadline = Date().addingTimeInterval(10)
+    while group.wait(timeout: .now()) == .timedOut {
+      if Date() >= deadline {
+        fputs("Annotator: timed out opening \(url.path)\n", stderr)
+        return false
+      }
+      // .common is kCFRunLoopCommonModes, which CFRunLoopRunSpecific rejects.
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    }
+    if let error = box.error {
+      fputs("Annotator: could not open \(url.path): \(error.localizedDescription)\n", stderr)
+      return false
+    }
+    return true
+  }
+
+  private func finishOneShot(_ reply: AgentReply, ocr: Bool) {
+    if ScreenRecordingHelper.isOpen {
+      ScreenRecordingHelper.onDismiss = { [weak self] in
+        guard let self, !self.agentMode, self.panel == nil else { return }
+        NSApp.terminate(nil)
+      }
+      return
+    }
+    deliverToTerminal(reply, ocr: ocr)
   }
 
   private func deliverToTerminal(_ reply: AgentReply, ocr: Bool) -> Never {

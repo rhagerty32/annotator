@@ -61,9 +61,8 @@ Then in Raycast:
 
 1. Command Palette → **Import Extension**
 2. Choose the `raycast` folder inside this repo (not `dist`)
-3. Optional: extension preferences → **Annotator binary** →  
-   `/absolute/path/to/annotator/.build/release/Annotator`  
-   (usually auto-detected after a build)
+3. Optional: extension preferences → **Annotator binary**.  
+   Raycast uses `/Applications/Annotator.app/Contents/MacOS/Annotator` when that app is installed. Set the preference only for a development binary.
 
 Grant **Screen Recording** permission when macOS prompts `screencapture`.
 
@@ -119,7 +118,7 @@ If the menu bar app is already running, that command hands the capture to it.
 1. Opening Annotator from the disk image starts a menu bar agent. It listens for the shortcut and for later launches.
 2. A shortcut, menu item, Raycast command, or CLI flag starts capture. macOS `screencapture` takes the region, window, or display.
 3. Annotator opens a floating panel. **S** copies a compressed PNG and closes the panel. **Esc** cancels. The menu bar agent keeps running. A one-shot launch from the CLI, when the agent is not already running, still quits after you finish.
-4. Raycast and `Annotator --capture` connect to the running agent when it is there, so they do not open a second copy.
+4. Raycast and `Annotator --capture` connect to the running agent when it is there, so they do not open a second copy. `AnnotatorBin` and a loose `.build/release/Annotator` do not stay up as the agent. If the menu bar app is not already running, they open `Annotator.app`, hand the request over, and exit.
 
 Copy Text skips the panel: capture, read pixels with Vision, show the HUD, copy the text.
 
@@ -162,7 +161,7 @@ npm run annotate                          # region, then editor
 .build/release/Annotator --ocr            # Copy Text path
 .build/release/Annotator --image shot.png
 .build/release/Annotator shot.png
-.build/release/Annotator                  # menu bar agent
+.build/release/Annotator                  # opens the installed app's menu bar agent
 ```
 
 ### Annotating

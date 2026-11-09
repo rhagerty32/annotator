@@ -16,6 +16,14 @@ final class MenuBarController: NSObject, NSMenuDelegate {
   /// On macOS 26 that is System Settings, Menu Bar, Allow in the Menu Bar.
   private(set) var hiddenBySystem = false
 
+  /// The button's status-item window has a real frame. A rejected MenuBarAgent
+  /// scene leaves the button with no window or a zero-size frame.
+  var hasPlacedButton: Bool {
+    guard let button = statusItem?.button, let window = button.window else { return false }
+    let frame = window.frame
+    return frame.width > 1 && frame.height > 1
+  }
+
   /// The button has a drawable image or a fallback title. Used by the UI self-test.
   var hasVisibleContent: Bool {
     guard let button = statusItem?.button else { return false }

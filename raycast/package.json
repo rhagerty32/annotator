@@ -76,11 +76,11 @@
     {
       "name": "annotatorPath",
       "title": "Annotator binary",
-      "description": "Absolute path to the Annotator executable (swift build -c release).",
+      "description": "Optional development binary. Raycast uses /Applications/Annotator.app when that app is installed.",
       "type": "textfield",
       "required": false,
       "default": "",
-      "placeholder": "/Users/you/…/annotator/.build/release/Annotator"
+      "placeholder": "/Applications/Annotator.app/Contents/MacOS/Annotator"
     }
   ],
   "dependencies": {
