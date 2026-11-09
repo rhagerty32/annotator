@@ -2,6 +2,7 @@ import AppKit
 import AppKitShims
 import CaptureKit
 import CoreGraphics
+import Foundation
 import SwiftUI
 
 /// Screen Recording is tied to the ad-hoc signature, so an update leaves the
