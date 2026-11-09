@@ -12,49 +12,64 @@
       "name": "annotate",
       "title": "Annotate Screenshot",
       "description": "Capture a region, annotate with hotkeys, copy to clipboard.",
-      "mode": "no-view"
+      "mode": "no-view",
+      "icon": "icon.png"
     },
     {
       "name": "copy-text",
       "title": "Copy Text from Screen",
       "description": "Capture a region, OCR it, copy the text to the clipboard.",
-      "mode": "no-view"
+      "mode": "no-view",
+      "icon": "icon.png"
     },
     {
       "name": "annotate-window",
       "title": "Annotate Window",
       "description": "Capture a window, then annotate.",
-      "mode": "no-view"
+      "mode": "no-view",
+      "icon": "icon.png"
     },
     {
       "name": "annotate-clipboard",
       "title": "Annotate Clipboard",
       "description": "Open the image already on the clipboard in Annotator.",
-      "mode": "no-view"
+      "mode": "no-view",
+      "icon": "icon.png"
     },
     {
       "name": "annotate-delayed",
       "title": "Annotate in 3s",
-      "description": "Wait 3 seconds, then capture a region — for menus that disappear.",
-      "mode": "no-view"
+      "description": "Wait 3 seconds, then capture a region, for menus that disappear.",
+      "mode": "no-view",
+      "icon": "icon.png"
     },
     {
       "name": "annotate-fullscreen",
       "title": "Annotate Full Screen",
       "description": "Capture the display under the cursor, then annotate.",
-      "mode": "no-view"
+      "mode": "no-view",
+      "icon": "icon.png"
     },
     {
       "name": "annotate-last-region",
       "title": "Annotate Last Region",
       "description": "Recapture the last region without the crosshair, then annotate.",
-      "mode": "no-view"
+      "mode": "no-view",
+      "icon": "icon.png"
     },
     {
       "name": "reopen",
       "title": "Reopen Last Shot",
       "description": "Open the last screenshot and its marks again.",
-      "mode": "no-view"
+      "mode": "no-view",
+      "icon": "icon.png"
+    },
+    {
+      "name": "settings",
+      "title": "Annotator Settings",
+      "description": "Open Annotator settings. Does not start a capture.",
+      "mode": "no-view",
+      "icon": "icon.png"
     }
   ],
   "preferences": [

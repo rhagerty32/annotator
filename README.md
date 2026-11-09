@@ -29,12 +29,14 @@ You need **macOS 14 or later**.
 
 1. Download `Annotator.dmg` from [GitHub Releases](https://github.com/rhagerty32/annotator/releases).
 2. Open the disk image and drag **Annotator** to **Applications**.
-3. Open Annotator. It stays in the menu bar (a viewfinder icon). The first launch opens Settings.
+3. Open Annotator. It stays in the menu bar (a viewfinder icon) and opens Settings. Open the app again any time to bring Settings back: double-click it in Finder, use Spotlight, or run `open -a Annotator`. The Raycast command **Annotator Settings** does the same. Capture commands do not open Settings.
 4. In Settings, confirm the shortcut for **Capture Region**. The default is **⌃⌥A**. Click the shortcut, then press the keys you want. Press Delete to clear it.
 5. Turn on **Launch at Login** if the shortcut should work after a restart.
 6. Grant **Screen Recording** when macOS asks. That permission is what capture uses. The shortcut itself does not need Accessibility.
 
 Pick any shortcut other than the macOS screenshot keys **⇧⌘3**, **⇧⌘4**, and **⇧⌘5**. Settings can also bind window, full screen, last region, copy text, and reopen.
+
+If you do not see the viewfinder, macOS may be hiding it. A full or notched menu bar can do that, and on macOS 26 a new app stays off the menu bar until you allow it. Open System Settings, choose Menu Bar, and turn Annotator on under Allow in the Menu Bar. You can still open Settings without the icon, by launching Annotator again.
 
 Later, choose **Check for Updates…** in the menu bar or in Settings. Sparkle downloads the latest release. Choose **Install and Relaunch** and Annotator restarts into that version.
 
@@ -127,6 +129,8 @@ Copy Text skips the panel: capture, read pixels with Vision, show the HUD, copy 
 
 Click the viewfinder. Capture Region, Capture Window, Capture Full Screen, Capture Last Region, Copy Text from Screen, and Reopen Last Shot are in the menu. Settings and Check for Updates are there too. Quit Annotator leaves the menu bar. Closing an annotation does not.
 
+The icon can be missing even when the menu bar is not full. On macOS 26, turn Annotator on under System Settings, Menu Bar, Allow in the Menu Bar. You can Command-drag the icon to move it once it is visible. Launching the app again, or Raycast **Annotator Settings**, opens Settings when the icon is hidden.
+
 The editor's status bar has a **Shortcuts** button that opens the same Settings window. **⌘,** inside the editor is still the canvas (void, chrome, checker), not the global shortcut settings.
 
 ### Raycast
@@ -143,6 +147,7 @@ Bind hotkeys to whichever commands you use. They launch the binary with the same
 | **Annotate Clipboard** | Open whatever image is already on the clipboard |
 | **Copy Text from Screen** | Region capture, OCR, clipboard. Edit after you paste. |
 | **Reopen Last Shot** | Open the last screenshot and its marks again |
+| **Annotator Settings** | Open Settings. Does not start a capture |
 
 ### Terminal
 

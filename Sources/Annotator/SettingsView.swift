@@ -9,11 +9,24 @@ final class SettingsModel: ObservableObject {
   @Published var shortcutMessage: String?
   @Published var shortcutMessageIsError = false
   @Published var recording: CaptureAction?
+  @Published var menuBarHiddenBySystem = false
 
   init() {
     shortcuts = ShortcutStore.load()
     launchAtLogin = LoginItem.isEnabled
     loginDetail = LoginItem.detail
+    menuBarHiddenBySystem = MenuBarController.shared.hiddenBySystem
+  }
+
+  func refreshMenuBar() {
+    menuBarHiddenBySystem = MenuBarController.shared.hiddenBySystem
+  }
+
+  var menuBarNote: String {
+    if menuBarHiddenBySystem {
+      return "macOS is hiding the menu bar icon. Open System Settings, choose Menu Bar, and turn Annotator on under Allow in the Menu Bar."
+    }
+    return "If the viewfinder is missing, open System Settings, choose Menu Bar, and turn Annotator on under Allow in the Menu Bar. A full or notched menu bar can hide it too. Open Annotator again to bring this window back."
   }
 
   func refreshLogin() {
@@ -121,6 +134,7 @@ struct SettingsView: View {
         .disabled(!LoginItem.isBundledApp)
         .toggleStyle(.switch)
         caption(model.loginDetail, isError: false)
+        caption(model.menuBarNote, isError: model.menuBarHiddenBySystem)
       }
 
       Divider().padding(.vertical, 14)
@@ -143,7 +157,13 @@ struct SettingsView: View {
     .frame(width: 440)
     .fixedSize(horizontal: true, vertical: true)
     .background(Color(nsColor: .windowBackgroundColor))
-    .onAppear { model.refreshLogin() }
+    .onAppear {
+      model.refreshLogin()
+      model.refreshMenuBar()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .annotatorMenuBarVisibilityChanged)) { _ in
+      model.refreshMenuBar()
+    }
     .onDisappear {
       model.cancelRecording()
       HotkeyCenter.shared.resume()
@@ -389,8 +409,30 @@ enum SettingsWindow {
 
     func show() {
       model.refreshLogin()
-      window?.makeKeyAndOrderFront(nil)
+      guard let window else { return }
+      // Accessory apps stay out of the Dock. A plain order-front leaves the
+      // window behind whatever is already active, so take focus, then drop
+      // back to accessory without ordering the window out.
+      window.level = .floating
+      window.hidesOnDeactivate = false
+      window.collectionBehavior.formUnion([.canJoinAllSpaces, .fullScreenAuxiliary, .moveToActiveSpace])
+      if window.isMiniaturized {
+        window.deminiaturize(nil)
+      }
+      let wasAccessory = NSApp.activationPolicy() == .accessory
+      if wasAccessory {
+        NSApp.setActivationPolicy(.regular)
+      }
       NSApp.activate(ignoringOtherApps: true)
+      window.makeKeyAndOrderFront(nil)
+      window.orderFrontRegardless()
+      if wasAccessory {
+        DispatchQueue.main.async {
+          NSApp.setActivationPolicy(.accessory)
+          window.level = .floating
+          window.orderFrontRegardless()
+        }
+      }
     }
 
     func windowWillClose(_ notification: Notification) {
