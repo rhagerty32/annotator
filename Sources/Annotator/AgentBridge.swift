@@ -44,7 +44,6 @@ enum AgentBridge {
   }
 
   /// In-process encode, listen, and decode check. Used by `--protocol-self-test`.
-  @MainActor
   static func runProtocolSelfTest() -> Int32 {
     if LaunchRequest.parse(["AnnotatorBin", "--settings"]) != .settings {
       fputs("protocol self-test: --settings did not parse\n", stderr)
@@ -59,18 +58,7 @@ enum AgentBridge {
       fputs("protocol self-test: Finder -psn_ did not parse as agent\n", stderr)
       return 1
     }
-    return runRoundTrip(.settings) { request in
-      request == .settings ? .success(text: "ok") : .failure("decoded \(String(describing: request))")
-    }
-  }
 
-  /// Same socket path the running agent uses, with a caller-supplied handler.
-  /// The UI self-test presents Settings inside `handle` and requires a reply.
-  @MainActor
-  static func runRoundTrip(
-    _ request: LaunchRequest,
-    handle: @escaping @MainActor (LaunchRequest) -> AgentReply
-  ) -> Int32 {
     // sun_path holds 104 bytes. A long NSTemporaryDirectory path would fail to bind.
     let socketPath = "/tmp/annotator-proto-\(getpid()).sock"
     socketURLOverride = URL(fileURLWithPath: socketPath)
@@ -81,23 +69,23 @@ enum AgentBridge {
     }
 
     let box = SelfTestBox()
-    guard start(handler: { incoming in
-      box.store(incoming)
-      return handle(incoming)
+    guard start(handler: { request in
+      box.store(request)
+      return .success(text: "ok")
     }) else {
       fputs("protocol self-test: could not listen\n", stderr)
       return 1
     }
 
     DispatchQueue.global(qos: .userInitiated).async {
-      box.storeReply(send(request))
+      box.storeReply(send(.settings))
     }
     let deadline = Date().addingTimeInterval(5)
     while box.reply() == nil && Date() < deadline {
       RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
     }
-    guard let reply = box.reply(), reply.ok, box.request() == request else {
-      fputs("protocol self-test: round trip failed (\(String(describing: box.reply())))\n", stderr)
+    guard let reply = box.reply(), reply.ok, box.request() == .settings else {
+      fputs("protocol self-test: settings round trip failed (\(String(describing: box.reply())))\n", stderr)
       return 1
     }
     return 0
@@ -233,21 +221,13 @@ private final class Server {
     // screencapture run loop can still accept this work without deadlocking.
     setTimeout(client, seconds: 180)
     let handler = self.handler
-    let finish: @MainActor () -> AgentReply = {
-      handler?(request) ?? .failure("Annotator is not running.")
-    }
-    // Sync onto the main actor. An async hop deadlocks the in-process self-test:
-    // its main thread is inside the run loop waiting for this reply.
-    let reply: AgentReply
-    if Thread.isMainThread {
-      reply = MainActor.assumeIsolated(finish)
-    } else {
-      reply = DispatchQueue.main.sync {
-        MainActor.assumeIsolated(finish)
+    DispatchQueue.main.async {
+      let reply = MainActor.assumeIsolated {
+        handler?(request) ?? .failure("Annotator is not running.")
       }
+      self.writeReply(client, reply)
+      close(client)
     }
-    self.writeReply(client, reply)
-    close(client)
   }
 
   private func writeReply(_ fd: Int32, _ reply: AgentReply) {

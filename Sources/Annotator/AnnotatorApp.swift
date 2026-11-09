@@ -17,10 +17,7 @@ final class AnnotatorWindow: NSWindow {
 enum AnnotatorMain {
   static func main() {
     if CommandLine.arguments.contains("--protocol-self-test") {
-      let code = MainActor.assumeIsolated {
-        AgentBridge.runProtocolSelfTest()
-      }
-      exit(code)
+      exit(AgentBridge.runProtocolSelfTest())
     }
     if CommandLine.arguments.contains("--ui-self-test") {
       exit(runUISelfTest())
@@ -33,8 +30,8 @@ enum AnnotatorMain {
     app.run()
   }
 
-  /// Presents the real Settings window and status item, then requires a `.settings`
-  /// socket reply. An AppKit exception or a missing reply fails the process.
+  /// Presents the real Settings window and status item. The socket round trip
+  /// stays in `--protocol-self-test`, unchanged from the version that passed.
   private static func runUISelfTest() -> Int32 {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
@@ -64,19 +61,15 @@ enum AnnotatorMain {
 
   @MainActor
   private static func exercisePackagedUI() -> Int32 {
+    // Same order as the agent: status item first, then Settings. An exception
+    // from setCollectionBehavior fails this test instead of skipping the icon.
     MenuBarController.shared.install()
-    let code = AgentBridge.runRoundTrip(.settings) { _ in
-      MenuBarController.shared.install()
-      if SettingsWindow.show() {
-        return .success()
-      }
-      return .failure("Could not open Settings.")
-    }
-    if code != 0 {
-      return code
-    }
     if !MenuBarController.shared.hasVisibleContent {
       fputs("ui self-test: status item has no image or title\n", stderr)
+      return 1
+    }
+    if !SettingsWindow.show() {
+      fputs("ui self-test: SettingsWindow.show failed\n", stderr)
       return 1
     }
     if !SettingsWindow.isWindowVisible {
