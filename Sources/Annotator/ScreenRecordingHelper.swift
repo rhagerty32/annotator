@@ -364,20 +364,6 @@ enum ScreenRecordingHelper {
     var seen = Set<ObjectIdentifier>()
     func visit(_ object: AnyObject) {
       guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-      // Xcode 26 moved these accessors off NSObject and onto the accessibility protocol.
-      if let element = object as? NSAccessibilityElementProtocol {
-        if let label = element.accessibilityLabel(), !label.isEmpty {
-          values.append(label)
-        }
-        if let value = element.accessibilityValue() as? String, !value.isEmpty {
-          values.append(value)
-        }
-        for child in element.accessibilityChildren() ?? [] {
-          if let child = child as? AnyObject {
-            visit(child)
-          }
-        }
-      }
       if let view = object as? NSView {
         if let text = view as? NSTextField, !text.stringValue.isEmpty {
           values.append(text.stringValue)
@@ -393,6 +379,8 @@ enum ScreenRecordingHelper {
     if let content = window.contentView {
       visit(content)
     }
+    // NSObject and NSAccessibilityElementProtocol do not expose
+    // accessibilityLabel in this SDK. The process accessibility element does.
     values.append(contentsOf: axStrings(AXUIElementCreateApplication(getpid()), depth: 0))
     return values
   }
