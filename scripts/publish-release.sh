@@ -88,14 +88,26 @@ else
 fi
 
 mkdir -p "$WORK/sparkle"
-curl -fsSL -o "$WORK/sparkle.tar.xz" \
-  "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz"
-tar -xJf "$WORK/sparkle.tar.xz" -C "$WORK/sparkle"
-SIGN_UPDATE="$(find "$WORK/sparkle" -name sign_update -type f -print -quit)"
-if [[ -z "$SIGN_UPDATE" ]]; then
-  echo "::error::Sparkle ${SPARKLE_VERSION} archive did not contain sign_update."
+# Same official 2.7.1 zip SwiftPM uses. It includes bin/sign_update, so the
+# release job does not download Sparkle-*.tar.xz from the release CDN.
+VENDORED="$ROOT/vendor/sparkle/${SPARKLE_VERSION}/Sparkle-for-Swift-Package-Manager.zip"
+EXPECTED_SPARKLE_SHA="3b9d424d79b1f3453cc44d23c3b0105bdff1298f5321aad8722f98b9149d5e95"
+if [[ ! -f "$VENDORED" ]]; then
+  echo "::error::Vendored Sparkle ${SPARKLE_VERSION} package zip is missing (${VENDORED})."
   exit 1
 fi
+actual="$(shasum -a 256 "$VENDORED" | awk '{print $1}')"
+if [[ "$actual" != "$EXPECTED_SPARKLE_SHA" ]]; then
+  echo "::error::Vendored Sparkle zip checksum ${actual} != ${EXPECTED_SPARKLE_SHA}."
+  exit 1
+fi
+unzip -q "$VENDORED" -d "$WORK/sparkle"
+SIGN_UPDATE="$WORK/sparkle/bin/sign_update"
+if [[ ! -f "$SIGN_UPDATE" ]]; then
+  echo "::error::Sparkle ${SPARKLE_VERSION} archive did not contain bin/sign_update."
+  exit 1
+fi
+chmod +x "$SIGN_UPDATE"
 
 export ANNOTATOR_VERSION="$VERSION"
 if [[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]]; then

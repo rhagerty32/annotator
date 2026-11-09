@@ -71,10 +71,20 @@ jobs:
           set -euo pipefail
           artifact_cache="${HOME}/Library/Caches/org.swift.swiftpm/artifacts"
           sparkle_zip="${artifact_cache}/https___github_com_sparkle_project_Sparkle_releases_download_2_7_1_Sparkle_for_Swift_Package_Manager_zip"
+          # Official Sparkle 2.7.1 asset. SHA-256 matches Sparkle's Package.swift
+          # checksum and the GitHub release asset digest. Checked out with the
+          # repo, so a 504 from the release CDN cannot block the build.
+          vendored="${GITHUB_WORKSPACE}/vendor/sparkle/2.7.1/Sparkle-for-Swift-Package-Manager.zip"
+          expected="3b9d424d79b1f3453cc44d23c3b0105bdff1298f5321aad8722f98b9149d5e95"
           seed_sparkle() {
             mkdir -p "${artifact_cache}"
-            curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o "${sparkle_zip}" \
-              "https://github.com/sparkle-project/Sparkle/releases/download/2.7.1/Sparkle-for-Swift-Package-Manager.zip"
+            test -f "${vendored}"
+            actual="$(shasum -a 256 "${vendored}" | awk '{print $1}')"
+            if [[ "${actual}" != "${expected}" ]]; then
+              echo "::error::Vendored Sparkle zip checksum ${actual} != ${expected}"
+              return 1
+            fi
+            cp "${vendored}" "${sparkle_zip}"
           }
           clear_artifacts() {
             rm -rf "${artifact_cache}" "${HOME}/Library/org.swift.swiftpm"
@@ -82,13 +92,7 @@ jobs:
           log="$(mktemp)"
           status=1
           for attempt in 1 2 3; do
-            if ! seed_sparkle; then
-              echo "Sparkle zip download failed (attempt ${attempt})."
-              if [[ "${attempt}" -eq 3 ]]; then
-                exit 1
-              fi
-              continue
-            fi
+            seed_sparkle
             set +e
             bash scripts/publish-release.sh 2>&1 | tee "${log}"
             status="${PIPESTATUS[0]}"
