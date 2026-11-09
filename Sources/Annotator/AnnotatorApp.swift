@@ -64,8 +64,12 @@ enum AnnotatorMain {
     // Same order as the agent: status item first, then Settings. An exception
     // from setCollectionBehavior fails this test instead of skipping the icon.
     MenuBarController.shared.install()
-    if !MenuBarController.shared.hasVisibleContent {
-      fputs("ui self-test: status item has no image or title\n", stderr)
+    let placed = Date().addingTimeInterval(2)
+    while Date() < placed && !MenuBarController.shared.hasPlacedButton {
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    }
+    if !MenuBarController.shared.hasVisibleContent || !MenuBarController.shared.hasPlacedButton {
+      fputs("ui self-test: status item button has no window or a zero frame\n", stderr)
       return 1
     }
     if !SettingsWindow.show() {
@@ -508,12 +512,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     MenuBarController.shared.onQuit = {
       NSApp.terminate(nil)
     }
-    // Install before Settings. A throw while presenting the window must not
-    // skip the status item or leave this function before the item exists.
+    // One status item, before Settings. A second install() calls reveal()
+    // again and asks MenuBarAgent for another scene.
     MenuBarController.shared.install()
-    DispatchQueue.main.async {
-      MenuBarController.shared.install()
-    }
     HotkeyCenter.shared.onFire = { action in
       DispatchQueue.main.async {
         MainActor.assumeIsolated {

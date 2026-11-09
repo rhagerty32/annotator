@@ -138,7 +138,30 @@ jobs:
       - name: Package the app and test the settings handoff
         run: |
           python3 scripts/package-dmg.py --app-only
-          dist/Annotator.app/Contents/MacOS/AnnotatorBin --protocol-self-test
+          test "$(plutil -extract CFBundleExecutable raw dist/Annotator.app/Contents/Info.plist)" = "Annotator"
+          # Codesign rewrites each copy, so compare linkage instead of bytes.
+          # The old C launcher does not link Sparkle.
+          otool -L dist/Annotator.app/Contents/MacOS/Annotator | grep -q Sparkle.framework
+          otool -L dist/Annotator.app/Contents/MacOS/AnnotatorBin | grep -q Sparkle.framework
           dist/Annotator.app/Contents/MacOS/Annotator --protocol-self-test
-          dist/Annotator.app/Contents/MacOS/AnnotatorBin --ui-self-test
+          dist/Annotator.app/Contents/MacOS/AnnotatorBin --protocol-self-test
           dist/Annotator.app/Contents/MacOS/Annotator --ui-self-test
+          dist/Annotator.app/Contents/MacOS/AnnotatorBin --ui-self-test
+          python3 - <<'PY'
+          import subprocess, sys
+          log = subprocess.run(
+              [
+                  "log", "show", "--last", "3m", "--style", "compact",
+                  "--predicate",
+                  'process == "Annotator" AND eventMessage CONTAINS "scene activation failed"',
+              ],
+              capture_output=True,
+              text=True,
+          )
+          text = (log.stdout or "") + (log.stderr or "")
+          hits = [line for line in text.splitlines() if "scene activation failed" in line]
+          if hits:
+              print("\n".join(hits), file=sys.stderr)
+              sys.exit("status item scene activation failed")
+          print("no scene activation failed for Annotator")
+          PY

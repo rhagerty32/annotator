@@ -1,9 +1,14 @@
 /*
- * Finder launcher for Annotator.app.
+ * Not installed as CFBundleExecutable.
  *
- * A double-click (and the Finder -psn_ argument) execs AnnotatorBin with no
- * extra flags so the menu bar agent stays resident. Any other argument is
- * forwarded unchanged, which keeps Raycast commands and the CLI working.
+ * exec'ing AnnotatorBin from this launcher leaves the running image as a
+ * different Mach-O than the bundle executable. On macOS 26, MenuBarAgent
+ * then rejects the status-item scene (BSServiceConnectionErrorDomain code 3,
+ * "scene activation failed") and the app never appears under
+ * System Settings > Menu Bar > Allow in the Menu Bar.
+ *
+ * The Swift binary is CFBundleExecutable. It drops Finder's -psn_ argument
+ * itself. This file is kept so that history is obvious.
  */
 #include <libgen.h>
 #include <mach-o/dyld.h>

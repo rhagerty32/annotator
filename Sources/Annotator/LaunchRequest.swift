@@ -19,6 +19,10 @@ enum LaunchRequest: Equatable {
   }
 
   static func parse(_ arguments: [String]) -> LaunchRequest {
+    // Finder passes -psn_ to CFBundleExecutable. Strip it here so the Swift
+    // binary can be that executable. A second Mach-O exec'd by a launcher is
+    // not the bundle's signed executable, and macOS 26 MenuBarAgent then
+    // refuses the status-item scene.
     let rest = arguments.dropFirst().filter { !$0.hasPrefix("-psn_") }
     if rest.isEmpty || Array(rest) == ["--agent"] {
       return .agent
