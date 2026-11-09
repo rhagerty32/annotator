@@ -1,4 +1,5 @@
 import AppKit
+import CaptureKit
 import Carbon.HIToolbox
 import Foundation
 

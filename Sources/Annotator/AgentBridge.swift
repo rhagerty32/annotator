@@ -1,3 +1,4 @@
+import CaptureKit
 import Darwin
 import Foundation
 
