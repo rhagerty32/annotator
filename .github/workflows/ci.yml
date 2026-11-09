@@ -16,18 +16,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Seed the Sparkle binary artifact cache
+      - name: Select Xcode 26
         run: |
-          # Xcode 16.4 on macos-15 fails a cold download of this GitHub release
-          # zip with "already exists in file system". SwiftPM copies a zip that
-          # is already in the artifact cache instead of downloading it.
-          cache="${HOME}/Library/Caches/org.swift.swiftpm/artifacts"
-          mkdir -p "${cache}"
-          curl -fsSL -o "${cache}/https___github_com_sparkle_project_Sparkle_releases_download_2_7_1_Sparkle_for_Swift_Package_Manager_zip" \
-            "https://github.com/sparkle-project/Sparkle/releases/download/2.7.1/Sparkle-for-Swift-Package-Manager.zip"
+          # macos-15 boots on Xcode 16.4. ToolbarSpacer and ByteCount come from
+          # the macOS 26 SDK, which is installed beside the default toolchain.
+          shopt -s nullglob
+          apps=(/Applications/Xcode_26*.app)
+          if [[ ${#apps[@]} -eq 0 ]]; then
+            echo "::error::No Xcode 26 is installed on this runner."
+            exit 1
+          fi
+          selected="$(printf '%s\n' "${apps[@]}" | sed -n 's|.*/Xcode_\(.*\)\.app|\1|p' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
+          echo "Using Xcode ${selected}"
+          sudo xcode-select -s "/Applications/Xcode_${selected}.app"
+          xcodebuild -version
+          swift --version
 
       - name: Build Swift (release)
-        run: swift build -c release
+        run: |
+          set -euo pipefail
+          artifact_cache="${HOME}/Library/Caches/org.swift.swiftpm/artifacts"
+          sparkle_zip="${artifact_cache}/https___github_com_sparkle_project_Sparkle_releases_download_2_7_1_Sparkle_for_Swift_Package_Manager_zip"
+          seed_sparkle() {
+            mkdir -p "${artifact_cache}"
+            curl -fsSL -o "${sparkle_zip}" \
+              "https://github.com/sparkle-project/Sparkle/releases/download/2.7.1/Sparkle-for-Swift-Package-Manager.zip"
+          }
+          clear_artifacts() {
+            rm -rf "${artifact_cache}" "${HOME}/Library/org.swift.swiftpm"
+          }
+          log="$(mktemp)"
+          status=1
+          for attempt in 1 2 3; do
+            seed_sparkle
+            set +e
+            swift build -c release 2>&1 | tee "${log}"
+            status="${PIPESTATUS[0]}"
+            set -e
+            if [[ "${status}" -eq 0 ]]; then
+              exit 0
+            fi
+            if ! grep -q "already exists in file system" "${log}"; then
+              exit "${status}"
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              exit "${status}"
+            fi
+            echo "SwiftPM Sparkle artifact collision (attempt ${attempt}). Clearing the cache and retrying."
+            clear_artifacts
+          done
+          exit "${status}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
