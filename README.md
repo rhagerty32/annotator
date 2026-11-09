@@ -36,9 +36,9 @@ You need **macOS 14 or later**.
 
 Pick any shortcut other than the macOS screenshot keys **⇧⌘3**, **⇧⌘4**, and **⇧⌘5**. Settings can also bind window, full screen, last region, copy text, and reopen.
 
-Later, choose **Check for Updates…** in the menu bar or in Settings. Annotator looks for a signed release, and Sparkle downloads it and relaunches into that version after you confirm Install and Relaunch.
+Later, choose **Check for Updates…** in the menu bar or in Settings. Sparkle downloads the latest release. Choose **Install and Relaunch** and Annotator restarts into that version.
 
-The copy currently in this repository's `dist/Annotator.dmg` is an ad-hoc signed build from before this updater. Install a release built by the Release workflow once Developer ID signing is configured. An ad-hoc app cannot update itself onto a Developer ID build. See [CONTRIBUTING.md](CONTRIBUTING.md) for the secrets that release needs.
+The app is ad-hoc signed. The first time you open it, macOS may say the developer cannot be verified. Right-click Annotator in Finder, choose Open, and confirm. After that, Check for Updates replaces the app in place. Apple Developer ID and notarization are not required.
 
 Raycast is optional. If you use it, its commands keep working and talk to the running menu bar app.
 
@@ -100,7 +100,7 @@ python3 scripts/package-dmg.py
 
 `scripts/generate-raycast-icon.swift` copies the master into `raycast/assets/icon.png` (or resamples it). It does not redraw the materials.
 
-On macOS, `package-dmg.py` builds the app, embeds Sparkle, signs it, and writes `dist/Annotator.dmg` plus `dist/Annotator.app`. With no `DEVELOPER_ID_APPLICATION` set, the signature is ad-hoc (`codesign --sign -`). Set that identity, `SPARKLE_PUBLIC_ED_KEY`, and the notarization variables from CONTRIBUTING to produce a build that can update later.
+On macOS, `package-dmg.py` builds the app, embeds Sparkle, ad-hoc signs it (`codesign --sign -`), and writes `dist/Annotator.dmg` plus `dist/Annotator.app`. That is the build Check for Updates replaces. Developer ID signing is optional.
 
 The Finder window content is 720 by 440 points, icons are 128 points, text is 13 points, Annotator.app is centered at (200, 230), and the Applications alias is centered at (520, 230).
 
@@ -192,9 +192,9 @@ Check for Updates is in the menu bar and in Settings. Sparkle reads:
 
 `https://github.com/rhagerty32/annotator/releases/latest/download/appcast.xml`
 
-A published GitHub Release runs `.github/workflows/release.yml`, which builds a Developer ID signed and notarized app, signs the update zip with Sparkle's EdDSA key, and uploads `Annotator.dmg`, `Annotator-<version>.zip`, and `appcast.xml`.
+A published GitHub Release runs `.github/workflows/release.yml`. The job ad-hoc signs the app, signs the update zip with Sparkle's EdDSA key, and uploads `Annotator.dmg`, `Annotator-<version>.zip`, and `appcast.xml`. Developer ID and notarization are optional and are not required for Install and Relaunch.
 
-That workflow does nothing useful until the signing secrets exist. This tree does not contain a private key or an Apple certificate. The in-app button is wired up, and a build without `SUPublicEDKey` explains that updates cannot be verified yet. The exact secrets and the one-time `generate_keys` steps are in [CONTRIBUTING.md](CONTRIBUTING.md).
+The private signing key is the GitHub Actions secret `SPARKLE_PRIVATE_KEY`. The matching public key belongs in `SUPublicEDKey` in `packaging/Info.plist`. Steps are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 The version Sparkle compares is `CFBundleVersion`. This branch sets it to `1.1.0`, and the release workflow replaces it with the tag (`v1.2.0` becomes `1.2.0`). The next release tag has to be greater than the version people installed.
 

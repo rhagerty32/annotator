@@ -1,11 +1,12 @@
 name: Release
 
-# Publishing a GitHub Release runs this job. It attaches a notarized disk
-# image, a Sparkle zip, and appcast.xml. Installed copies read the appcast from
+# Publishing a GitHub Release runs this job. It attaches the disk image, the
+# Sparkle zip, and appcast.xml. Installed copies read
 # https://github.com/rhagerty32/annotator/releases/latest/download/appcast.xml
 #
-# The job fails before uploading anything when signing secrets are missing.
-# Secret names and the one-time Sparkle key steps are in CONTRIBUTING.md.
+# SPARKLE_PRIVATE_KEY is required so sign_update can write sparkle:edSignature.
+# Developer ID and notarization secrets are optional. When they are absent the
+# app is ad-hoc signed and the update still installs.
 
 on:
   release:
@@ -34,7 +35,7 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
 
-      - name: Build, sign, notarize, and write the appcast
+      - name: Build, sign the update zip, and write the appcast
         id: build
         env:
           TAG: ${{ github.event.release.tag_name || inputs.tag }}

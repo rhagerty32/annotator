@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build, sign, notarize, and describe one Annotator release.
-# The GitHub workflow is the caller. It fails closed when signing secrets are
-# missing, and it does not upload an appcast unless Sparkle can sign the zip.
+# Build an Annotator release, sign the update zip with Sparkle EdDSA, and write appcast.xml.
+# Apple Developer ID and notarization are optional. When they are absent the app is ad-hoc signed.
+# Check for Updates still accepts the zip when sparkle:edSignature matches SUPublicEDKey.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,28 +10,14 @@ cd "$ROOT"
 SPARKLE_VERSION="2.7.1"
 FEED_REPO="rhagerty32/annotator"
 
-required=(
-  TAG
-  SPARKLE_PRIVATE_KEY
-  SPARKLE_PUBLIC_ED_KEY
-  DEVELOPER_ID_APPLICATION_P12_BASE64
-  DEVELOPER_ID_APPLICATION_P12_PASSWORD
-  DEVELOPER_ID_APPLICATION
-  APPLE_NOTARY_KEY_ID
-  APPLE_NOTARY_ISSUER_ID
-  APPLE_NOTARY_KEY_P8
-)
-
-missing=()
-for name in "${required[@]}"; do
-  if [[ -z "${!name:-}" ]]; then
-    missing+=("$name")
-  fi
-done
-if (( ${#missing[@]} > 0 )); then
-  echo "::error::Missing GitHub secrets or env: ${missing[*]}"
-  echo "No appcast was published. Check for Updates cannot verify a release until these exist."
-  echo "See CONTRIBUTING.md for how to create each one."
+if [[ -z "${TAG:-}" ]]; then
+  echo "::error::TAG is required (for example v1.2.0)."
+  exit 1
+fi
+if [[ -z "${SPARKLE_PRIVATE_KEY:-}" ]]; then
+  echo "::error::SPARKLE_PRIVATE_KEY is required to sign the update zip."
+  echo "Apple Developer ID and notarization secrets are not required."
+  echo "Set SPARKLE_PRIVATE_KEY to the Sparkle EdDSA private key (base64 seed from generate_keys -x)."
   exit 1
 fi
 
@@ -46,33 +32,59 @@ if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
   exit 1
 fi
 
+apple_ready=0
+if [[ -n "${DEVELOPER_ID_APPLICATION:-}" \
+   && -n "${DEVELOPER_ID_APPLICATION_P12_BASE64:-}" \
+   && -n "${DEVELOPER_ID_APPLICATION_P12_PASSWORD:-}" \
+   && -n "${APPLE_NOTARY_KEY_ID:-}" \
+   && -n "${APPLE_NOTARY_ISSUER_ID:-}" \
+   && -n "${APPLE_NOTARY_KEY_P8:-}" ]]; then
+  apple_ready=1
+fi
+
 WORK="$(mktemp -d)"
 cleanup() {
-  security delete-keychain "$WORK/annotator-release.keychain-db" >/dev/null 2>&1 || true
+  if [[ -n "${KEYCHAIN:-}" ]]; then
+    security delete-keychain "$KEYCHAIN" >/dev/null 2>&1 || true
+  fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT
 
-KEYCHAIN="$WORK/annotator-release.keychain-db"
-KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
-P12="$WORK/developer-id.p12"
-P8="$WORK/AuthKey.p8"
 SPARKLE_KEY="$WORK/sparkle_ed25519_private"
-P12_PATH="$P12" python3 -c 'import base64, os, pathlib; raw = "".join(os.environ["DEVELOPER_ID_APPLICATION_P12_BASE64"].split()); pathlib.Path(os.environ["P12_PATH"]).write_bytes(base64.b64decode(raw))'
-printf '%s\n' "$APPLE_NOTARY_KEY_P8" > "$P8"
 SPARKLE_KEY_PATH="$SPARKLE_KEY" python3 -c 'import os, pathlib; pathlib.Path(os.environ["SPARKLE_KEY_PATH"]).write_text(os.environ["SPARKLE_PRIVATE_KEY"].strip() + "\n")'
-chmod 600 "$P12" "$P8" "$SPARKLE_KEY"
+chmod 600 "$SPARKLE_KEY"
 
-security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-security set-keychain-settings -lut 21600 "$KEYCHAIN"
-security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-security import "$P12" -k "$KEYCHAIN" -P "$DEVELOPER_ID_APPLICATION_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
-security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
-security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-security default-keychain -s "$KEYCHAIN"
-if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "$DEVELOPER_ID_APPLICATION" >/dev/null; then
-  echo "::error::Imported certificate does not contain identity: $DEVELOPER_ID_APPLICATION"
-  exit 1
+if [[ "$apple_ready" -eq 1 ]]; then
+  echo "Apple signing secrets are present. Signing with Developer ID and notarizing."
+  KEYCHAIN="$WORK/annotator-release.keychain-db"
+  KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+  P12="$WORK/developer-id.p12"
+  P8="$WORK/AuthKey.p8"
+  P12_PATH="$P12" python3 -c 'import base64, os, pathlib; raw = "".join(os.environ["DEVELOPER_ID_APPLICATION_P12_BASE64"].split()); pathlib.Path(os.environ["P12_PATH"]).write_bytes(base64.b64decode(raw))'
+  printf '%s\n' "$APPLE_NOTARY_KEY_P8" > "$P8"
+  chmod 600 "$P12" "$P8"
+  security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+  security set-keychain-settings -lut 21600 "$KEYCHAIN"
+  security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+  security import "$P12" -k "$KEYCHAIN" -P "$DEVELOPER_ID_APPLICATION_P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+  security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+  security default-keychain -s "$KEYCHAIN"
+  if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -F "$DEVELOPER_ID_APPLICATION" >/dev/null; then
+    echo "::error::Imported certificate does not contain identity: $DEVELOPER_ID_APPLICATION"
+    exit 1
+  fi
+  export DEVELOPER_ID_APPLICATION
+  export APPLE_NOTARY_KEY_ID
+  export APPLE_NOTARY_ISSUER_ID
+  export APPLE_NOTARY_KEY_PATH="$P8"
+else
+  echo "Publishing an ad-hoc signed build. Developer ID and notarization are not required."
+  unset DEVELOPER_ID_APPLICATION || true
+  unset APPLE_NOTARY_KEY_ID || true
+  unset APPLE_NOTARY_ISSUER_ID || true
+  unset APPLE_NOTARY_KEY_PATH || true
 fi
 
 mkdir -p "$WORK/sparkle"
@@ -86,11 +98,9 @@ if [[ -z "$SIGN_UPDATE" ]]; then
 fi
 
 export ANNOTATOR_VERSION="$VERSION"
-export DEVELOPER_ID_APPLICATION
-export SPARKLE_PUBLIC_ED_KEY
-export APPLE_NOTARY_KEY_ID
-export APPLE_NOTARY_ISSUER_ID
-export APPLE_NOTARY_KEY_PATH="$P8"
+if [[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
+  export SPARKLE_PUBLIC_ED_KEY
+fi
 
 python3 scripts/package-dmg.py
 
@@ -104,7 +114,8 @@ SIGN_STATUS=$?
 set -e
 if [[ "$SIGN_STATUS" -ne 0 ]]; then
   echo "::error::sign_update failed."
-  cat "$WORK/sign.err"
+  # sign_update writes errors to stderr. Do not print the key file.
+  sed -e 's/[A-Za-z0-9+/=]\{40,\}/[redacted]/g' "$WORK/sign.err" || true
   exit "$SIGN_STATUS"
 fi
 printf '%s\n' "$SIGN_OUT" > "$WORK/sign.txt"
@@ -129,4 +140,4 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 fi
 
-echo "Signed Annotator ${VERSION}. Upload the dmg, zip, and appcast to ${TAG}."
+echo "Prepared Annotator ${VERSION}. Upload the dmg, zip, and appcast to ${TAG}."

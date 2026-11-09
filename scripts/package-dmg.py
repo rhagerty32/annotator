@@ -306,12 +306,13 @@ def sign_app(app: Path) -> None:
         sign_item(app, identity, identifier="local.annotator")
         if identity == "-":
             print(
-                "Ad-hoc signature. Sparkle updates need a Developer ID signed and notarized release.",
+                "Ad-hoc signature. Open Annotator from the Finder if macOS asks the first time. "
+                "Check for Updates still installs a newer zip signed with the Sparkle EdDSA key.",
                 flush=True,
             )
         elif notarization_env() is None:
             print(
-                "Developer ID signature without notarization. Gatekeeper will reject the download until it is notarized.",
+                "Developer ID signature without notarization.",
                 flush=True,
             )
         return

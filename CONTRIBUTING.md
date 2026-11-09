@@ -135,72 +135,50 @@ Publishing a GitHub Release (or running the Release workflow with a tag) is the 
 - `Annotator-<version>.zip` containing `Annotator.app` at the archive root (the file Sparkle installs)
 - `appcast.xml`
 
-The workflow is `.github/workflows/release.yml`. It calls `scripts/publish-release.sh`. If any secret below is missing, the job stops before upload and does not publish an unsigned feed.
+The workflow is `.github/workflows/release.yml`. It calls `scripts/publish-release.sh`.
 
-### What already works in a local build
+The job ad-hoc signs the app (`codesign --sign -`) and still publishes the disk image, the zip, and `appcast.xml`. Sparkle accepts that update when the zip's `sparkle:edSignature` matches `SUPublicEDKey` in the installed app. The new app's ad-hoc signature only has to be intact. It does not have to match a Developer ID.
 
-- The menu bar app, shortcut recorder, Launch at Login, and the Check for Updates button.
-- `python3 scripts/package-dmg.py` on a Mac, which embeds `Sparkle.framework` and ad-hoc signs the app when `DEVELOPER_ID_APPLICATION` is unset.
-- Raycast flags, handed off to the agent when it is running.
+Apple Developer ID and notarization secrets are optional. If every one of them is set, the job uses them. If any are missing, it skips them and continues.
 
-### What is still required for the installed app to update itself
+The one required secret is `SPARKLE_PRIVATE_KEY`: the base64 EdDSA seed from Sparkle 2.7.1 `generate_keys -x` (32 bytes after decoding). Do not commit it. `sign_update` from the Sparkle 2.7.1 tools must be the signer, which is what the workflow downloads.
 
-The disk image produced without the secrets below is ad-hoc signed (`codesign --sign -`), same as the packager's default. Gatekeeper and Sparkle both require a Developer ID signature, and Sparkle also requires an EdDSA signature from a keypair whose public half is inside the app that is already installed. An ad-hoc install will not accept a later Developer ID update. Ship one notarized Developer ID build, then later releases can update it.
+Put the matching public key in `packaging/Info.plist` as `SUPublicEDKey` (32 bytes, base64). The packager keeps that value unless `SPARKLE_PUBLIC_ED_KEY` is set.
 
-Add these GitHub Actions secrets on `rhagerty32/annotator` (Settings, Secrets and variables, Actions). Do not commit any of them.
-
-| Secret | What it is |
-|---|---|
-| `SPARKLE_PUBLIC_ED_KEY` | The `SUPublicEDKey` string printed by `generate_keys`. Safe to commit into `packaging/Info.plist` as well, once you have generated it. |
-| `SPARKLE_PRIVATE_KEY` | The EdDSA private key exported by `generate_keys -x`. One line of base64. |
-| `DEVELOPER_ID_APPLICATION_P12_BASE64` | Base64 of a Developer ID Application `.p12` (certificate plus private key). |
-| `DEVELOPER_ID_APPLICATION_P12_PASSWORD` | Password chosen when exporting that `.p12`. |
-| `DEVELOPER_ID_APPLICATION` | The codesign identity, for example `Developer ID Application: Ryan Hagerty (TEAMID)`. |
-| `APPLE_NOTARY_KEY_ID` | App Store Connect API key ID. |
-| `APPLE_NOTARY_ISSUER_ID` | App Store Connect issuer ID. |
-| `APPLE_NOTARY_KEY_P8` | Full contents of the `AuthKey_XXXX.p8` file, including the BEGIN and END lines. |
-
-Create the API key in App Store Connect with access to notarize. Create the `.p12` in Keychain Access by exporting the Developer ID Application certificate and its private key. Give the export a password.
-
-### One-time Sparkle key
-
-On a Mac, after `swift build` or from the Sparkle 2.7.1 tools (`bin/generate_keys` inside `Sparkle-2.7.1.tar.xz`):
+On a Mac:
 
 ```bash
 generate_keys --account annotator
-```
-
-That stores the private key in your login keychain and prints the public key as an `SUPublicEDKey` string.
-
-Put that string in the `SPARKLE_PUBLIC_ED_KEY` secret. You can also add the same key to `packaging/Info.plist` so local Developer ID builds match CI. The packager overwrites it when `SPARKLE_PUBLIC_ED_KEY` is set.
-
-Export the private key for GitHub, then delete the exported file:
-
-```bash
 generate_keys --account annotator -x "$HOME/Desktop/annotator_sparkle_ed25519.key"
+gh secret set SPARKLE_PRIVATE_KEY < "$HOME/Desktop/annotator_sparkle_ed25519.key"
+rm -P "$HOME/Desktop/annotator_sparkle_ed25519.key"
 ```
 
-The file is one line. That line is `SPARKLE_PRIVATE_KEY`. `sign_update` must be the 2.7.1 binary, matching `Package.swift`.
+`generate_keys` prints the `SUPublicEDKey` string. Commit that string in the plist, not the private file.
 
-Then publish a GitHub Release whose tag is greater than the installed version, for example `v1.2.0` if people have `1.1.0`. The workflow signs the app with Developer ID, notarizes it, staples the ticket, signs the zip with the EdDSA key, and uploads the appcast.
+Then publish a GitHub Release whose tag is greater than the installed version, for example `v1.2.0` when people have `1.1.0`.
 
-### Trying an update on one Mac before the secrets exist
+What the user does:
 
-There is no signed feed in this pull request, so Check for Updates on an ad-hoc build tells you the public key is missing. After you have a keypair and a Developer ID certificate locally:
+1. Install `Annotator.dmg`. If macOS says the developer cannot be verified, right-click the app, choose Open, and confirm.
+2. Later, choose Check for Updates.
+3. Sparkle reads `appcast.xml` from the latest release, downloads `Annotator-<version>.zip`, and checks the EdDSA signature.
+4. Choose Install and Relaunch. Sparkle replaces `Annotator.app` and starts the new build. The menu bar agent comes back.
 
-1. Put the public key in `packaging/Info.plist` under `SUPublicEDKey`.
-2. Package and install version `1.1.0` into `/Applications` with `DEVELOPER_ID_APPLICATION` set to your identity, plus the notarization variables if you want Gatekeeper to accept it.
-3. Build version `1.2.0` (`ANNOTATOR_VERSION=1.2.0`), zip `Annotator.app` with `ditto -c -k --keepParent`, and run `sign_update --ed-key-file <private key file> Annotator-1.2.0.zip`.
-4. Write an appcast with `scripts/write_appcast.py` and serve it: `python3 -m http.server 8741`.
-5. Point the installed app at that file and check again:
+Automatic checks run about once a day. The app does not relaunch in the middle of an annotation. Install and Relaunch is the restart.
+
+### Trying an update against a local feed
+
+1. Install a build whose `SUPublicEDKey` matches the key you will sign with.
+2. Build a higher `ANNOTATOR_VERSION`, zip `Annotator.app` with `ditto -c -k --keepParent`, and run `sign_update --ed-key-file <private key file> Annotator-<version>.zip`.
+3. Write an appcast with `scripts/write_appcast.py` and serve it: `python3 -m http.server 8741`.
+4. Point the installed app at that file and check again:
 
 ```bash
 defaults write local.annotator AnnotatorUpdateFeedURL http://127.0.0.1:8741/appcast.xml
 ```
 
-Quit and reopen Annotator so Sparkle reads the override. The override is a developer hook. The shipping feed stays in Info.plist.
-
-Sparkle's update window downloads the zip and, when you choose Install and Relaunch, replaces `Annotator.app` and starts the new build. Automatic checks are on (about once a day). The app does not silently relaunch while you are annotating. Confirming the Sparkle install is the relaunch.
+Quit and reopen Annotator so Sparkle reads the override. The shipping feed stays in Info.plist.
 
 ## Reporting bugs and suggesting features
 

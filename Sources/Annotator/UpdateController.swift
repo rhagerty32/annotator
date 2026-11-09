@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 import Sparkle
 
-/// Sparkle check. Stays quiet until the app bundle has a public EdDSA key.
+/// Sparkle check. The installed app carries SUPublicEDKey and relaunches after Install and Relaunch.
 final class UpdateController: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate, NSMenuItemValidation {
   static let shared = UpdateController()
 
@@ -42,9 +42,9 @@ final class UpdateController: NSObject, SPUUpdaterDelegate, SPUStandardUserDrive
       return "Install Annotator.app to download updates. This command line build cannot replace itself."
     }
     if !hasPublicKey {
-      return "This build has no Sparkle public key, so it cannot verify a release. The signing steps are in CONTRIBUTING."
+      return "Downloads the latest release and relaunches Annotator once this copy includes its Sparkle public key."
     }
-    return "Looks for a signed release, downloads it, and relaunches Annotator."
+    return "Downloads the latest release and relaunches Annotator."
   }
 
   func startAutomaticChecks() {
@@ -113,8 +113,13 @@ final class UpdateController: NSObject, SPUUpdaterDelegate, SPUStandardUserDrive
 
   private func explainUnavailable() {
     let alert = NSAlert()
-    alert.messageText = "Updates are not available for this build"
-    alert.informativeText = Self.statusDetail
+    if Self.isBundledApp {
+      alert.messageText = "Check for Updates"
+      alert.informativeText = Self.statusDetail
+    } else {
+      alert.messageText = "Open Annotator from Applications"
+      alert.informativeText = "Check for Updates downloads the latest release and relaunches that copy."
+    }
     alert.addButton(withTitle: "OK")
     alert.runModal()
   }
