@@ -1,106 +1,89 @@
 import AppKit
 
-let dim: CGFloat = 512
+// Ink Trio Raycast icon.
+//
+// The approved master is assets/icon/ink-trio.png (1024, precomposed).
+// Glass, enamel, and the frosted blur where the red ring passes behind the
+// frame are in that raster. Redrawing them with AppKit shapes produces a
+// flatter icon, so this script copies the master when it is already 1024
+// and only resamples when a different size is requested.
+//
+// The system App Icon is a separate full-bleed image (assets/icon/AppIcon-1024.png)
+// produced by scripts/generate-icons.py. Raycast keeps the precomposed master.
 
-guard let rep = NSBitmapImageRep(
-  bitmapDataPlanes: nil,
-  pixelsWide: Int(dim),
-  pixelsHigh: Int(dim),
-  bitsPerSample: 8,
-  samplesPerPixel: 4,
-  hasAlpha: true,
-  isPlanar: false,
-  colorSpaceName: .deviceRGB,
-  bytesPerRow: 0,
-  bitsPerPixel: 0
-) else {
-  fatalError("bitmap")
+let outputPath = CommandLine.arguments.count > 1
+  ? CommandLine.arguments[1]
+  : "raycast/assets/icon.png"
+let masterPath = CommandLine.arguments.count > 2
+  ? CommandLine.arguments[2]
+  : "assets/icon/ink-trio.png"
+let dim = 1024
+
+let masterURL = URL(fileURLWithPath: masterPath)
+let outputURL = URL(fileURLWithPath: outputPath)
+let masterData: Data
+do {
+  masterData = try Data(contentsOf: masterURL)
+} catch {
+  fputs("Missing Ink Trio master at \(masterPath). Run from the repo root.\n", stderr)
+  exit(1)
+}
+
+if let rep = NSBitmapImageRep(data: masterData),
+   rep.pixelsWide == dim,
+   rep.pixelsHigh == dim {
+  do {
+    try masterData.write(to: outputURL)
+  } catch {
+    fputs("Could not write \(outputPath): \(error)\n", stderr)
+    exit(1)
+  }
+  print("Wrote \(outputURL.path) (master, \(dim)px)")
+  exit(0)
+}
+
+guard let image = NSImage(data: masterData),
+      let rep = NSBitmapImageRep(
+        bitmapDataPlanes: nil,
+        pixelsWide: dim,
+        pixelsHigh: dim,
+        bitsPerSample: 8,
+        samplesPerPixel: 4,
+        hasAlpha: true,
+        isPlanar: false,
+        colorSpaceName: .deviceRGB,
+        bytesPerRow: 0,
+        bitsPerPixel: 0
+      ) else {
+  fputs("Could not resample \(masterPath)\n", stderr)
+  exit(1)
 }
 rep.size = NSSize(width: dim, height: dim)
 
 NSGraphicsContext.saveGraphicsState()
-guard let ctx = NSGraphicsContext(bitmapImageRep: rep) else { fatalError("ctx") }
+guard let ctx = NSGraphicsContext(bitmapImageRep: rep) else {
+  fputs("Could not open bitmap context\n", stderr)
+  exit(1)
+}
 NSGraphicsContext.current = ctx
 ctx.shouldAntialias = true
 ctx.imageInterpolation = .high
-let cg = ctx.cgContext
-cg.setShouldAntialias(true)
-
-func srgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1) -> NSColor {
-  NSColor(srgbRed: r, green: g, blue: b, alpha: a)
-}
-
-let bg = srgb(0.086, 0.086, 0.090)
-let card = srgb(0.172, 0.172, 0.180)
-let ink = srgb(0.93, 0.94, 0.95)
-let accent = srgb(1.00, 0.23, 0.19)
-
-bg.setFill()
-NSRect(x: 0, y: 0, width: dim, height: dim).fill()
-
-let inset: CGFloat = 88
-let frame = NSRect(x: inset, y: inset, width: dim - inset * 2, height: dim - inset * 2)
-let radius: CGFloat = 44
-let cardPath = NSBezierPath(roundedRect: frame, xRadius: radius, yRadius: radius)
-card.setFill()
-cardPath.fill()
-
-func cropMark(origin: NSPoint, xSign: CGFloat, ySign: CGFloat) {
-  let arm: CGFloat = 62
-  let path = NSBezierPath()
-  path.lineCapStyle = .round
-  path.lineJoinStyle = .round
-  path.lineWidth = 22
-  path.move(to: NSPoint(x: origin.x + xSign * arm, y: origin.y))
-  path.line(to: origin)
-  path.line(to: NSPoint(x: origin.x, y: origin.y + ySign * arm))
-  ink.setStroke()
-  path.stroke()
-}
-
-let pad: CGFloat = 28
-cropMark(origin: NSPoint(x: frame.minX + pad, y: frame.maxY - pad), xSign: 1, ySign: -1)
-cropMark(origin: NSPoint(x: frame.maxX - pad, y: frame.maxY - pad), xSign: -1, ySign: -1)
-cropMark(origin: NSPoint(x: frame.minX + pad, y: frame.minY + pad), xSign: 1, ySign: 1)
-cropMark(origin: NSPoint(x: frame.maxX - pad, y: frame.minY + pad), xSign: -1, ySign: 1)
-
-let start = NSPoint(x: 176, y: 176)
-let end = NSPoint(x: 348, y: 344)
-let angle = atan2(end.y - start.y, end.x - start.x)
-let head: CGFloat = 50
-let shaftEnd = NSPoint(
-  x: end.x - cos(angle) * 30,
-  y: end.y - sin(angle) * 30
+image.draw(
+  in: NSRect(x: 0, y: 0, width: dim, height: dim),
+  from: NSRect(origin: .zero, size: image.size),
+  operation: .copy,
+  fraction: 1
 )
-
-let shaft = NSBezierPath()
-shaft.lineWidth = 24
-shaft.lineCapStyle = .round
-shaft.move(to: start)
-shaft.line(to: shaftEnd)
-accent.setStroke()
-shaft.stroke()
-
-let spread: CGFloat = 22
-let left = NSPoint(
-  x: end.x - cos(angle) * head + cos(angle + .pi / 2) * spread,
-  y: end.y - sin(angle) * head + sin(angle + .pi / 2) * spread
-)
-let right = NSPoint(
-  x: end.x - cos(angle) * head + cos(angle - .pi / 2) * spread,
-  y: end.y - sin(angle) * head + sin(angle - .pi / 2) * spread
-)
-let headPath = NSBezierPath()
-headPath.move(to: end)
-headPath.line(to: left)
-headPath.line(to: right)
-headPath.close()
-accent.setFill()
-headPath.fill()
-
 NSGraphicsContext.restoreGraphicsState()
 
-guard let data = rep.representation(using: .png, properties: [:]) else { fatalError("png") }
-let url = URL(fileURLWithPath: CommandLine.arguments[1])
-try data.write(to: url)
-print("Wrote \(url.path)")
+guard let png = rep.representation(using: .png, properties: [:]) else {
+  fputs("Could not encode PNG\n", stderr)
+  exit(1)
+}
+do {
+  try png.write(to: outputURL)
+} catch {
+  fputs("Could not write \(outputPath): \(error)\n", stderr)
+  exit(1)
+}
+print("Wrote \(outputURL.path) (resampled to \(dim)px)")

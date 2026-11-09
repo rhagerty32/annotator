@@ -8,6 +8,11 @@ let package = Package(
     .executable(name: "Annotator", targets: ["Annotator"]),
     .executable(name: "Capture", targets: ["Capture"]),
   ],
+  dependencies: [
+    // Sparkle is the one third-party Swift dependency. It downloads a signed
+    // update and relaunches the app. See CONTRIBUTING.md.
+    .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.7.1"),
+  ],
   targets: [
     .target(
       name: "CaptureKit",
@@ -20,8 +25,17 @@ let package = Package(
     ),
     .executableTarget(
       name: "Annotator",
-      dependencies: ["CaptureKit"],
-      path: "Sources/Annotator"
+      dependencies: [
+        "CaptureKit",
+        .product(name: "Sparkle", package: "Sparkle"),
+      ],
+      path: "Sources/Annotator",
+      linkerSettings: [
+        .unsafeFlags([
+          "-Xlinker", "-rpath",
+          "-Xlinker", "@executable_path/../Frameworks",
+        ]),
+      ]
     ),
   ]
 )

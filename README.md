@@ -1,6 +1,6 @@
 # Annotator
 
-**Capture a screen region on macOS, mark it up with keyboard shortcuts, and copy a PNG to your clipboard** — with an optional Raycast workflow and on-device OCR for “copy text from screen.”
+**Capture a screen region on macOS, mark it up with keyboard shortcuts, and copy a PNG to your clipboard.** The installed app lives in the menu bar. Raycast and on-device OCR ("copy text from screen") are optional.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/rhagerty32/annotator/actions/workflows/ci.yml/badge.svg)](https://github.com/rhagerty32/annotator/actions/workflows/ci.yml)
@@ -14,14 +14,35 @@
 
 ## Features
 
-- **Region, window, or full-screen capture** via Raycast commands or CLI flags (`screencapture` under the hood).
-- **Floating annotation panel** — accessory app with no Dock icon; **S** copies compressed PNG and quits, **Esc** cancels.
-- **Keyboard-driven tools** — shapes, arrows, draw, text, spotlight, redact, crop, numbered steps, and more (press **?** in the panel for the cheat sheet).
-- **Copy text from screen** — same region picker, on-device Vision OCR, results to the clipboard without opening the editor.
-- **Reopen last shot** — restores the previous capture and mark-up where supported.
-- **Raycast extension** in `raycast/` — hotkey-friendly commands that launch the locally built binary.
+- **Region, window, or full-screen capture** from the menu bar, a keyboard shortcut, Raycast, or the CLI. Capture uses `screencapture`.
+- **Menu bar app** so a shortcut keeps working without Raycast. Launch at Login is in Settings.
+- **Floating annotation panel.** The app has no Dock icon while you annotate. **S** copies a compressed PNG and closes the editor. **Esc** cancels. The menu bar app stays running.
+- **Keyboard-driven tools:** shapes, arrows, draw, text, spotlight, redact, crop, numbered steps, and more. Press **?** in the panel for the cheat sheet.
+- **Copy text from screen:** the same region picker, on-device Vision OCR, and the text on the clipboard.
+- **Reopen last shot:** restores the previous capture and its marks.
+- **Check for Updates** downloads a signed release and relaunches Annotator. You do not go back to GitHub to replace the app.
+- **Raycast extension** in `raycast/` for the same commands. If the menu bar app is already running, Raycast hands the capture to it.
 
-## Install
+## Install the app
+
+You need **macOS 14 or later**.
+
+1. Download `Annotator.dmg` from [GitHub Releases](https://github.com/rhagerty32/annotator/releases).
+2. Open the disk image and drag **Annotator** to **Applications**.
+3. Open Annotator. It stays in the menu bar (a viewfinder icon). The first launch opens Settings.
+4. In Settings, confirm the shortcut for **Capture Region**. The default is **⌃⌥A**. Click the shortcut, then press the keys you want. Press Delete to clear it.
+5. Turn on **Launch at Login** if the shortcut should work after a restart.
+6. Grant **Screen Recording** when macOS asks. That permission is what capture uses. The shortcut itself does not need Accessibility.
+
+Pick any shortcut other than the macOS screenshot keys **⇧⌘3**, **⇧⌘4**, and **⇧⌘5**. Settings can also bind window, full screen, last region, copy text, and reopen.
+
+Later, choose **Check for Updates…** in the menu bar or in Settings. Sparkle downloads the latest release. Choose **Install and Relaunch** and Annotator restarts into that version.
+
+The app is ad-hoc signed. The first time you open it, macOS may say the developer cannot be verified. Right-click Annotator in Finder, choose Open, and confirm. After that, Check for Updates replaces the app in place. Apple Developer ID and notarization are not required.
+
+Raycast is optional. If you use it, its commands keep working and talk to the running menu bar app.
+
+## Install for development
 
 You need **macOS 14+**, [Swift](https://swift.org) (Xcode or Command Line Tools), **Node.js**, and optionally [Raycast](https://www.raycast.com).
 
@@ -32,7 +53,7 @@ npm --prefix raycast install
 ./reload-raycast.sh
 ```
 
-That builds the app, builds the Raycast extension, and restarts Raycast if it is installed.
+That builds the app, builds the Raycast extension, and restarts Raycast if it is installed. Quit Annotator from the menu bar before rebuilding if a copy is already running. `./reload-raycast.sh` does that for you.
 
 Then in Raycast:
 
@@ -61,28 +82,56 @@ npm --prefix raycast run build   # Raycast extension only
 ./reload-raycast.sh              # both + Raycast restart
 ```
 
-Binaries: `.build/release/Annotator` and `.build/release/Capture`.
+Binaries: `.build/release/Annotator` and `.build/release/Capture`. The Annotator binary links Sparkle. Run it from `.build/release` so that framework can be found. The disk image build copies Sparkle into `Annotator.app`.
 
-Quick try without Raycast:
+### App icon and disk image
+
+Ink Trio is the app icon and the drag-to-Applications disk image.
+
+- `assets/icon/ink-trio.png` is the approved 1024 precomposed master. Raycast uses this file.
+- `assets/icon/ink-trio.svg` is the vector source. The glass, enamel, and blur live in the raster master.
+- `assets/icon/AppIcon-1024.png` is the full-bleed system icon. The dark field fills the square so macOS can mask it.
+- `assets/dmg/background.png` (720x440) and `background@2x.png` (1440x880) are the Finder window art. `background.tiff` is the HiDPI image.
+
+```bash
+python3 scripts/generate-icons.py
+python3 scripts/package-dmg.py
+```
+
+`scripts/generate-raycast-icon.swift` copies the master into `raycast/assets/icon.png` (or resamples it). It does not redraw the materials.
+
+On macOS, `package-dmg.py` builds the app, embeds Sparkle, ad-hoc signs it (`codesign --sign -`), and writes `dist/Annotator.dmg` plus `dist/Annotator.app`. That is the build Check for Updates replaces. Developer ID signing is optional.
+
+The Finder window content is 720 by 440 points, icons are 128 points, text is 13 points, Annotator.app is centered at (200, 230), and the Applications alias is centered at (520, 230).
+
+Quick try without opening the menu bar app:
 
 ```bash
 npm run annotate
 ```
 
+If the menu bar app is already running, that command hands the capture to it.
+
 ## How it works
 
-1. A Raycast command (or a CLI flag) launches the `Annotator` binary.
-2. macOS `screencapture` takes the region, window, or display.
-3. Annotator opens as a floating accessory panel — no Dock icon.
-4. You annotate. **S** copies a compressed PNG and quits. **Esc** cancels.
+1. Opening Annotator from the disk image starts a menu bar agent. It listens for the shortcut and for later launches.
+2. A shortcut, menu item, Raycast command, or CLI flag starts capture. macOS `screencapture` takes the region, window, or display.
+3. Annotator opens a floating panel. **S** copies a compressed PNG and closes the panel. **Esc** cancels. The menu bar agent keeps running. A one-shot launch from the CLI, when the agent is not already running, still quits after you finish.
+4. Raycast and `Annotator --capture` connect to the running agent when it is there, so they do not open a second copy.
 
-Copy Text skips the panel: capture → read pixels with Vision → HUD → clipboard.
+Copy Text skips the panel: capture, read pixels with Vision, show the HUD, copy the text.
 
 ## Usage
 
+### Menu bar
+
+Click the viewfinder. Capture Region, Capture Window, Capture Full Screen, Capture Last Region, Copy Text from Screen, and Reopen Last Shot are in the menu. Settings and Check for Updates are there too. Quit Annotator leaves the menu bar. Closing an annotation does not.
+
+The editor's status bar has a **Shortcuts** button that opens the same Settings window. **⌘,** inside the editor is still the canvas (void, chrome, checker), not the global shortcut settings.
+
 ### Raycast
 
-Bind hotkeys to whichever commands you use.
+Bind hotkeys to whichever commands you use. They launch the binary with the same flags as before.
 
 | Command | What it does |
 |---|---|
@@ -92,7 +141,7 @@ Bind hotkeys to whichever commands you use.
 | **Annotate Last Region** | Same rectangle as last time, no crosshair |
 | **Annotate in 3s** | Wait 3 seconds, then region capture (menus that vanish) |
 | **Annotate Clipboard** | Open whatever image is already on the clipboard |
-| **Copy Text from Screen** | Region capture → OCR → clipboard. Edit after you paste. |
+| **Copy Text from Screen** | Region capture, OCR, clipboard. Edit after you paste. |
 | **Reopen Last Shot** | Open the last screenshot and its marks again |
 
 ### Terminal
@@ -108,6 +157,7 @@ npm run annotate                          # region, then editor
 .build/release/Annotator --ocr            # Copy Text path
 .build/release/Annotator --image shot.png
 .build/release/Annotator shot.png
+.build/release/Annotator                  # menu bar agent
 ```
 
 ### Annotating
@@ -127,7 +177,8 @@ Press **?** in the panel for the full cheat sheet. Hold **space** to see every t
 | **S** | Copy and close |
 | **⌘C** | Copy and stay |
 | **⇧S / ⌘S** | Save PNG |
-| **Esc** | Deselect, then quit |
+| **Esc** | Deselect, then close |
+| **⌘Q** | Quit Annotator, including the menu bar agent |
 
 Drag an arrow’s midpoint to curve it. Drag a rectangle’s top-edge dot to round the corners. **⌘,** opens canvas settings (void, chrome, checker).
 
@@ -135,12 +186,28 @@ Drag an arrow’s midpoint to curve it. Drag a rectangle’s top-edge dot to rou
 
 Same region picker as annotate. After you release, a small HUD reads the pixels. When it says **Copied**, paste wherever you already were. Esc in the picker cancels.
 
+## Updates
+
+Check for Updates is in the menu bar and in Settings. Sparkle reads:
+
+`https://github.com/rhagerty32/annotator/releases/latest/download/appcast.xml`
+
+A published GitHub Release runs `.github/workflows/release.yml`. The job ad-hoc signs the app, signs the update zip with Sparkle's EdDSA key, and uploads `Annotator.dmg`, `Annotator-<version>.zip`, and `appcast.xml`. Developer ID and notarization are optional and are not required for Install and Relaunch.
+
+The private signing key is the GitHub Actions secret `SPARKLE_PRIVATE_KEY`. The matching public key belongs in `SUPublicEDKey` in `packaging/Info.plist`. Steps are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+The version Sparkle compares is `CFBundleVersion`. This branch sets it to `1.1.0`, and the release workflow replaces it with the tag (`v1.2.0` becomes `1.2.0`). The next release tag has to be greater than the version people installed.
+
 ## Project layout
 
 ```
-Sources/Annotator/   Swift app (panel, tools, OCR)
+Sources/Annotator/   Swift app (panel, menu bar, settings, updates)
 Sources/CaptureKit/  Shared capture helpers + Capture CLI
+packaging/           App plist, Finder launcher
 raycast/             Raycast extension (launches the binary)
+scripts/package-dmg.py
+scripts/publish-release.sh
+.github/workflows/release.yml
 reload-raycast.sh    Build both + restart Raycast
 ```
 

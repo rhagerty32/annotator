@@ -146,6 +146,13 @@ struct RootView: View {
         .foregroundStyle(.secondary)
         .lineLimit(1)
       Spacer(minLength: 8)
+      Button("Shortcuts") {
+        SettingsWindow.show()
+      }
+      .buttonStyle(.plain)
+      .font(.system(size: 11))
+      .foregroundStyle(.secondary)
+      .help("Capture shortcuts, launch at login, and updates")
       if state.zoom > 1.01 {
         Text("\(Int((state.zoom * 100).rounded()))%")
           .font(.system(size: 11).monospacedDigit())

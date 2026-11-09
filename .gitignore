@@ -1,9 +1,13 @@
 .DS_Store
 .build/
 .swiftpm/
+__pycache__/
 Package.resolved
 raycast/node_modules/
 raycast/dist/
 raycast/raycast-env.d.ts
 *.xcodeproj/
 xcuserdata/
+dist/Annotator.app/
+dist/*.zip
+dist/appcast.xml

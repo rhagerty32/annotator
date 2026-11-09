@@ -50,6 +50,12 @@ final class AppState: ObservableObject {
 
   let imageURL: URL?
   private(set) var dragSession: DragSession?
+  /// Close the editor. The app delegate quits only for a one-shot launch.
+  var onFinish: (() -> Void)?
+
+  var hasMarkup: Bool {
+    !annotations.isEmpty || isTyping || draft != nil
+  }
 
   /// Canvas view size in SwiftUI points. Not published — updated from the view.
   var canvasSize: CGSize = .zero
@@ -632,16 +638,32 @@ final class AppState: ObservableObject {
   func saveAndQuit() {
     guard !isTyping else { return }
     copyToClipboard()
-    persistSessionNow()
-    cleanupTempFile()
-    NSApp.terminate(nil)
+    flushSession()
+    finishEditing()
   }
 
   func cancelAndQuit() {
     commitTextIfNeeded(cancel: true)
+    flushSession()
+    finishEditing()
+  }
+
+  func prepareForTermination() {
+    commitTextIfNeeded(cancel: false)
+    flushSession()
+  }
+
+  func flushSession() {
     persistSessionNow()
     cleanupTempFile()
-    NSApp.terminate(nil)
+  }
+
+  private func finishEditing() {
+    if let onFinish {
+      onFinish()
+    } else {
+      NSApp.terminate(nil)
+    }
   }
 
   private struct HistoryFrame {

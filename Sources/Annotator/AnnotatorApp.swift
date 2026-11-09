@@ -31,91 +31,52 @@ private final class OCRResultBox: @unchecked Sendable {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
-  private var state: AppState!
+  private var state: AppState?
   private var panel: AnnotatorWindow?
   private var keyMonitor: Any?
   private var flagMonitor: Any?
   private var keyUpMonitor: Any?
 
-  func applicationDidFinishLaunching(_ notification: Notification) {
-    if CommandLine.arguments.contains("--ocr") {
-      Self.runOCRAndExit()
-    }
+  private var agentMode = false
+  private var captureBusy = false
+  private var endingEditor = false
 
-    // Return first so the run loop is spinning before `screencapture -i`
-    // (needed for last-region mouse tracking, and so the picker can appear).
-    DispatchQueue.main.async { [weak self] in
-      guard let self else { return }
-      let loaded = Self.loadLaunchImage()
-      self.state = AppState(
-        image: loaded.image,
-        imageURL: loaded.url,
-        cgImage: loaded.cgImage,
-        annotations: loaded.annotations,
-        remembersSession: loaded.remembersSession
-      )
-      self.installHotkeys()
-      self.showPanel()
+  func applicationDidFinishLaunching(_ notification: Notification) {
+    installMainMenu()
+    let request = LaunchRequest.parse(CommandLine.arguments)
+    switch request {
+    case .agent:
+      becomeAgentOrExit()
+    default:
+      if let reply = AgentBridge.send(request) {
+        deliverToTerminal(reply, ocr: request.isOCR)
+      }
+      // Return first so the run loop is spinning before `screencapture -i`.
+      DispatchQueue.main.async { [weak self] in
+        self?.runOneShot(request)
+      }
     }
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-    // A dismissed NSSavePanel must not quit the editor. Quit only via Esc, the
-    // close button, or Save / S (see windowShouldClose, cancelAndQuit, saveAndQuit).
+    // A dismissed NSSavePanel must not quit the editor. The editor closes on
+    // Esc, the close button, or Save / S. The menu bar agent keeps running.
     false
   }
 
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    state?.prepareForTermination()
+    AgentBridge.stop()
+    return .terminateNow
+  }
+
   func windowShouldClose(_ sender: NSWindow) -> Bool {
-    state.cancelAndQuit()
+    state?.cancelAndQuit()
     return false
   }
 
-  private static func runOCRAndExit() -> Never {
-    OCRService.warm()
-
-    guard let url = CaptureService.capture(locateRegion: false) else {
-      exit(1)
-    }
-
-    func cleanup() {
-      try? FileManager.default.removeItem(at: url)
-    }
-
-    let hud = OCRHUDController()
-    hud.present()
-    hud.flushAppearance()
-
-    let box = OCRResultBox()
-    let group = DispatchGroup()
-    group.enter()
-    DispatchQueue.global(qos: .userInitiated).async {
-      box.text = OCRService.recognize(contentsOf: url)
-      group.leave()
-    }
-
-    while group.wait(timeout: .now() + .milliseconds(16)) == .timedOut {
-      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.016))
-    }
-
-    if let text = box.text, !text.isEmpty {
-      if let data = text.data(using: .utf8) {
-        FileHandle.standardOutput.write(data)
-      }
-      hud.finishSuccess()
-      RunLoop.current.run(until: Date(timeIntervalSinceNow: 1.05))
-      hud.dismiss()
-      cleanup()
-      exit(0)
-    }
-
-    hud.finishFailure()
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 1.05))
-    hud.dismiss()
-    cleanup()
-    exit(2)
-  }
-
   private func showPanel() {
+    guard let state else { return }
     let mouse = NSEvent.mouseLocation
 
     let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
@@ -167,22 +128,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     NSApp.activate(ignoringOtherApps: true)
   }
 
-  private func installHotkeys() {
+  private func installEditorHotkeys() {
+    removeEditorHotkeys()
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
       guard let self, let state = self.state else { return event }
       return self.handleKey(event, state: state)
     }
     flagMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-      self?.state.modifiersChanged()
+      self?.state?.modifiersChanged()
       return event
     }
     keyUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
       if event.keyCode == 49 {
-        self?.state.spaceHeld = false
-        self?.state.releaseSpacePalette()
+        self?.state?.spaceHeld = false
+        self?.state?.releaseSpacePalette()
       }
       return event
     }
+  }
+
+  private func removeEditorHotkeys() {
+    if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+    if let flagMonitor { NSEvent.removeMonitor(flagMonitor) }
+    if let keyUpMonitor { NSEvent.removeMonitor(keyUpMonitor) }
+    keyMonitor = nil
+    flagMonitor = nil
+    keyUpMonitor = nil
   }
 
   private func handleKey(_ event: NSEvent, state: AppState) -> NSEvent? {
@@ -214,6 +185,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     if flags.contains(.command) {
+      if chars == "q",
+         !flags.contains(.shift), !flags.contains(.option), !flags.contains(.control) {
+        NSApp.terminate(nil)
+        return nil
+      }
       if state.showHelp || state.showToolPalette { return nil }
       if state.isTyping { return event }
       switch chars {
@@ -406,113 +382,278 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     return event.charactersIgnoringModifiers == "/" && flags.contains(.shift)
   }
 
-  private struct LoadedImage {
-    let image: NSImage
-    let url: URL?
-    var cgImage: CGImage?
-    var annotations: [Annotation] = []
-    var remembersSession = false
-  }
-
-  private static func loadLaunchImage() -> LoadedImage {
-    let args = CommandLine.arguments
-    let delay: Int = {
-      guard let index = args.firstIndex(of: "--delay"),
-            args.index(after: index) < args.endIndex
-      else { return 0 }
-      return Int(args[args.index(after: index)]) ?? 0
-    }()
-
-    if args.contains("--clipboard") {
-      if let image = ClipboardService.imageFromPasteboard(),
-         let loaded = ShotLoader.load(nsImage: image)
-      {
-        return LoadedImage(image: loaded.image, url: nil, cgImage: loaded.cgImage, remembersSession: true)
-      }
-      fputs("Annotator: no image on the clipboard.\n", stderr)
-      exit(1)
+  private func becomeAgentOrExit() {
+    if AgentBridge.send(.settings) != nil {
+      exit(0)
     }
-
-    if args.contains("--reopen") {
-      guard let session = LastSession.load() else {
-        fputs("Annotator: no last shot.\n", stderr)
-        exit(1)
-      }
-      let loaded = ShotLoader.load(nsImage: session.image)
-      return LoadedImage(
-        image: session.image,
-        url: nil,
-        cgImage: loaded?.cgImage,
-        annotations: session.annotations,
-        remembersSession: true
-      )
-    }
-
-    if args.contains("--capture") {
-      if let url = CaptureService.capture(
-        window: args.contains("--window"),
-        delaySeconds: delay,
-        fullScreen: args.contains("--fullscreen"),
-        repeatLast: args.contains("--repeat")
-      ),
-         let loaded = ShotLoader.load(url: url)
-      {
-        return LoadedImage(image: loaded.image, url: url, cgImage: loaded.cgImage, remembersSession: true)
-      }
-      fputs("Annotator: capture cancelled or failed.\n", stderr)
-      exit(1)
-    }
-
-    if let pathIndex = args.firstIndex(of: "--image"),
-       args.index(after: pathIndex) < args.endIndex
-    {
-      let path = args[args.index(after: pathIndex)]
-      let url = URL(fileURLWithPath: path)
-      if args.contains("--wait") {
-        guard CaptureRunner.waitForImage(at: url, timeout: 180) else {
+    if !AgentBridge.acquireLock() {
+      for _ in 0..<20 {
+        if AgentBridge.send(.settings) != nil {
           exit(0)
         }
+        Thread.sleep(forTimeInterval: 0.05)
       }
-      if let loaded = ShotLoader.load(url: url) {
-        return LoadedImage(image: loaded.image, url: url, cgImage: loaded.cgImage, remembersSession: true)
-      }
-      fputs("Annotator: could not load image at \(path)\n", stderr)
-      exit(1)
+      fputs("Annotator is already running.\n", stderr)
+      exit(0)
     }
+    let listening = AgentBridge.start { [weak self] request in
+      guard let self else { return .failure("Annotator is not running.") }
+      return self.performLocal(request)
+    }
+    if !listening {
+      fputs("Annotator: shortcut handoff is unavailable.\n", stderr)
+    }
+    startAgent()
+  }
 
-    if args.count > 1 {
-      let path = args[1]
-      if !path.hasPrefix("-") {
-        let url = URL(fileURLWithPath: path)
-        if let loaded = ShotLoader.load(url: url) {
-          return LoadedImage(image: loaded.image, url: url, cgImage: loaded.cgImage, remembersSession: true)
+  private func startAgent() {
+    agentMode = true
+    MenuBarController.shared.onCapture = { action in
+      DispatchQueue.main.async {
+        MainActor.assumeIsolated {
+          guard let delegate = NSApp.delegate as? AppDelegate else { return }
+          _ = delegate.performLocal(action.request)
         }
       }
     }
-
-    let size = NSSize(width: 1280, height: 800)
-    let rep = NSBitmapImageRep(
-      bitmapDataPlanes: nil,
-      pixelsWide: Int(size.width),
-      pixelsHigh: Int(size.height),
-      bitsPerSample: 8,
-      samplesPerPixel: 4,
-      hasAlpha: true,
-      isPlanar: false,
-      colorSpaceName: .deviceRGB,
-      bytesPerRow: 0,
-      bitsPerPixel: 0
-    )!
-    rep.size = size
-    NSGraphicsContext.saveGraphicsState()
-    if let ctx = NSGraphicsContext(bitmapImageRep: rep) {
-      NSGraphicsContext.current = ctx
-      NSColor.windowBackgroundColor.setFill()
-      NSRect(origin: .zero, size: size).fill()
+    MenuBarController.shared.onSettings = {
+      DispatchQueue.main.async {
+        MainActor.assumeIsolated {
+          SettingsWindow.show()
+        }
+      }
     }
-    NSGraphicsContext.restoreGraphicsState()
-    let fallback = NSImage(size: size)
-    fallback.addRepresentation(rep)
-    return LoadedImage(image: fallback, url: nil, cgImage: fallback.fullCGImage)
+    MenuBarController.shared.onQuit = {
+      NSApp.terminate(nil)
+    }
+    MenuBarController.shared.install()
+    HotkeyCenter.shared.onFire = { action in
+      DispatchQueue.main.async {
+        MainActor.assumeIsolated {
+          guard let delegate = NSApp.delegate as? AppDelegate else { return }
+          _ = delegate.performLocal(action.request)
+        }
+      }
+    }
+    HotkeyCenter.shared.start()
+    UpdateController.shared.startAutomaticChecks()
+    OCRService.warm()
+    if !AgentPreferences.didPresentSettings {
+      AgentPreferences.didPresentSettings = true
+      SettingsWindow.show()
+    }
+  }
+
+  private func runOneShot(_ request: LaunchRequest) {
+    agentMode = false
+    switch request {
+    case .ocr:
+      deliverToTerminal(performOCR(), ocr: true)
+    case .agent, .activate, .settings, .updates:
+      startAgent()
+    default:
+      let reply = openEditor(for: request)
+      if panel == nil {
+        deliverToTerminal(reply, ocr: false)
+      }
+    }
+  }
+
+  private func performLocal(_ request: LaunchRequest) -> AgentReply {
+    switch request {
+    case .agent, .activate:
+      NSApp.activate(ignoringOtherApps: true)
+      return .success()
+    case .settings:
+      SettingsWindow.show()
+      return .success()
+    case .updates:
+      UpdateController.shared.checkFromUser()
+      return .success()
+    case .ocr:
+      return performOCR()
+    case .capture, .clipboard, .reopen, .image, .file:
+      return openEditor(for: request)
+    }
+  }
+
+  private func openEditor(for request: LaunchRequest) -> AgentReply {
+    if captureBusy {
+      NSSound.beep()
+      return .failure("Annotator is already capturing.")
+    }
+    if panel != nil {
+      if state?.hasMarkup == true {
+        focusEditor()
+        return .success()
+      }
+      state?.commitTextIfNeeded(cancel: true)
+      state?.flushSession()
+      closeEditor()
+    }
+    captureBusy = true
+    let loaded = SessionLoader.load(request)
+    captureBusy = false
+    switch loaded {
+    case .success(let image):
+      present(image)
+      return .success()
+    case .failure(let error):
+      if error.silent {
+        return .success()
+      }
+      return .failure(error.message, code: error.code)
+    }
+  }
+
+  private func present(_ loaded: SessionLoader.LoadedImage) {
+    let state = AppState(
+      image: loaded.image,
+      imageURL: loaded.url,
+      cgImage: loaded.cgImage,
+      annotations: loaded.annotations,
+      remembersSession: loaded.remembersSession
+    )
+    state.onFinish = { [weak self] in
+      self?.closeEditor()
+    }
+    self.state = state
+    installEditorHotkeys()
+    showPanel()
+  }
+
+  private func closeEditor() {
+    if endingEditor { return }
+    endingEditor = true
+    defer { endingEditor = false }
+    removeEditorHotkeys()
+    state?.onFinish = nil
+    let window = panel
+    panel = nil
+    state = nil
+    window?.delegate = nil
+    window?.orderOut(nil)
+    window?.contentViewController = nil
+    if !agentMode {
+      NSApp.terminate(nil)
+    }
+  }
+
+  private func focusEditor() {
+    panel?.orderFrontRegardless()
+    panel?.makeKey()
+    NSApp.activate(ignoringOtherApps: true)
+  }
+
+  private func performOCR() -> AgentReply {
+    if captureBusy {
+      NSSound.beep()
+      return .failure("Annotator is already capturing.")
+    }
+    captureBusy = true
+    defer { captureBusy = false }
+    let hidden = panel
+    hidden?.orderOut(nil)
+    defer {
+      if panel === hidden {
+        hidden?.orderFrontRegardless()
+      }
+    }
+
+    OCRService.warm()
+    guard let url = CaptureService.capture(locateRegion: false) else {
+      return .failure("capture cancelled or failed.")
+    }
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let hud = OCRHUDController()
+    hud.present()
+    hud.flushAppearance()
+
+    let box = OCRResultBox()
+    let group = DispatchGroup()
+    group.enter()
+    DispatchQueue.global(qos: .userInitiated).async {
+      box.text = OCRService.recognize(contentsOf: url)
+      group.leave()
+    }
+    while group.wait(timeout: .now() + .milliseconds(16)) == .timedOut {
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.016))
+    }
+
+    if let text = box.text, !text.isEmpty {
+      ClipboardService.copyString(text)
+      hud.finishSuccess()
+      RunLoop.current.run(until: Date(timeIntervalSinceNow: 1.05))
+      hud.dismiss()
+      return .success(text: text)
+    }
+
+    hud.finishFailure()
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 1.05))
+    hud.dismiss()
+    return AgentReply(ok: false, code: 2, text: "", error: "No text found")
+  }
+
+  private func deliverToTerminal(_ reply: AgentReply, ocr: Bool) -> Never {
+    if ocr, !reply.text.isEmpty, let data = reply.text.data(using: .utf8) {
+      FileHandle.standardOutput.write(data)
+    }
+    if reply.code != 0, let error = reply.error, !error.isEmpty {
+      fputs("Annotator: \(error)\n", stderr)
+    }
+    exit(reply.code)
+  }
+
+  private func installMainMenu() {
+    let main = NSMenu()
+
+    let appItem = NSMenuItem()
+    main.addItem(appItem)
+    let appMenu = NSMenu()
+    appItem.submenu = appMenu
+    let about = NSMenuItem(title: "About Annotator", action: #selector(showAbout(_:)), keyEquivalent: "")
+    about.target = self
+    appMenu.addItem(about)
+    appMenu.addItem(.separator())
+    let settings = NSMenuItem(title: "Settings…", action: #selector(showSettingsAction(_:)), keyEquivalent: "")
+    settings.target = self
+    appMenu.addItem(settings)
+    let updates = NSMenuItem(
+      title: "Check for Updates…",
+      action: #selector(UpdateController.checkForUpdatesMenu(_:)),
+      keyEquivalent: ""
+    )
+    updates.target = UpdateController.shared
+    appMenu.addItem(updates)
+    appMenu.addItem(.separator())
+    appMenu.addItem(NSMenuItem(title: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+    let quit = NSMenuItem(title: "Quit Annotator", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    appMenu.addItem(quit)
+
+    let editItem = NSMenuItem()
+    main.addItem(editItem)
+    let edit = NSMenu(title: "Edit")
+    editItem.submenu = edit
+    edit.addItem(NSMenuItem(title: "Undo", action: Selector(("undo:")), keyEquivalent: "z"))
+    let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+    redo.keyEquivalentModifierMask = [.command, .shift]
+    edit.addItem(redo)
+    edit.addItem(.separator())
+    edit.addItem(NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+    edit.addItem(NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+    edit.addItem(NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+    edit.addItem(NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+
+    NSApp.mainMenu = main
+  }
+
+  @objc private func showAbout(_ sender: Any?) {
+    NSApp.activate(ignoringOtherApps: true)
+    NSApp.orderFrontStandardAboutPanel(nil)
+  }
+
+  @objc private func showSettingsAction(_ sender: Any?) {
+    SettingsWindow.show()
   }
 }
