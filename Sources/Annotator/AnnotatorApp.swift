@@ -19,6 +19,9 @@ enum AnnotatorMain {
     if CommandLine.arguments.contains("--protocol-self-test") {
       exit(AgentBridge.runProtocolSelfTest())
     }
+    if CommandLine.arguments.contains("--ui-self-test") {
+      exit(runUISelfTest())
+    }
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
@@ -26,6 +29,60 @@ enum AnnotatorMain {
     app.setActivationPolicy(.accessory)
     app.run()
   }
+
+  /// Presents the real Settings window and status item, then requires a `.settings`
+  /// socket reply. An AppKit exception or a missing reply fails the process.
+  private static func runUISelfTest() -> Int32 {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let box = UITestBox()
+    DispatchQueue.main.async {
+      box.code = exercisePackagedUI()
+      app.stop(nil)
+      if let event = NSEvent.otherEvent(
+        with: .applicationDefined,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: 0,
+        context: nil,
+        subtype: 0,
+        data1: 0,
+        data2: 0
+      ) {
+        app.postEvent(event, atStart: true)
+      }
+    }
+    app.run()
+    return box.code
+  }
+
+  private static func exercisePackagedUI() -> Int32 {
+    MenuBarController.shared.install()
+    let code = AgentBridge.runRoundTrip(.settings) { _ in
+      MenuBarController.shared.install()
+      if SettingsWindow.show() {
+        return .success()
+      }
+      return .failure("Could not open Settings.")
+    }
+    if code != 0 {
+      return code
+    }
+    if !MenuBarController.shared.hasVisibleContent {
+      fputs("ui self-test: status item has no image or title\n", stderr)
+      return 1
+    }
+    if !SettingsWindow.isWindowVisible {
+      fputs("ui self-test: settings window is not visible\n", stderr)
+      return 1
+    }
+    return 0
+  }
+}
+
+private final class UITestBox: @unchecked Sendable {
+  var code: Int32 = 1
 }
 
 private final class OCRResultBox: @unchecked Sendable {
@@ -121,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     panel.hidesOnDeactivate = false
     panel.isMovableByWindowBackground = true
     panel.level = .floating
-    panel.collectionBehavior = [.fullScreenAuxiliary, .canJoinAllSpaces]
+    panel.collectionBehavior = WindowBehavior.allSpaces
     panel.isReleasedWhenClosed = false
     panel.animationBehavior = .none
     panel.minSize = NSSize(width: AnnotatorChrome.minWidth, height: AnnotatorChrome.minHeight)
@@ -452,8 +509,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     MenuBarController.shared.onQuit = {
       NSApp.terminate(nil)
     }
-    // Create the status item after this launch callback returns. Creating it
-    // inside applicationDidFinishLaunching can leave the button with no window.
+    // Install before Settings. A throw while presenting the window must not
+    // skip the status item or leave this function before the item exists.
+    MenuBarController.shared.install()
     DispatchQueue.main.async {
       MenuBarController.shared.install()
     }
@@ -497,8 +555,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       NSApp.activate(ignoringOtherApps: true)
       return .success()
     case .settings:
-      SettingsWindow.show()
-      return .success()
+      MenuBarController.shared.install()
+      if SettingsWindow.show() {
+        return .success()
+      }
+      return .failure("Could not open Settings.")
     case .updates:
       UpdateController.shared.checkFromUser()
       return .success()

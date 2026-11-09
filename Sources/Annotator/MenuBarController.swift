@@ -16,6 +16,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
   /// On macOS 26 that is System Settings, Menu Bar, Allow in the Menu Bar.
   private(set) var hiddenBySystem = false
 
+  /// The button has a drawable image or a fallback title. Used by the UI self-test.
+  var hasVisibleContent: Bool {
+    guard let button = statusItem?.button else { return false }
+    if let image = button.image, image.size.width > 1, image.size.height > 1 {
+      return true
+    }
+    return !button.title.isEmpty
+  }
+
   private var statusItem: NSStatusItem?
 
   func install() {

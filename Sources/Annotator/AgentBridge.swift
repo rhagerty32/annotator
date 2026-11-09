@@ -58,7 +58,17 @@ enum AgentBridge {
       fputs("protocol self-test: Finder -psn_ did not parse as agent\n", stderr)
       return 1
     }
+    return runRoundTrip(.settings) { request in
+      request == .settings ? .success(text: "ok") : .failure("decoded \(String(describing: request))")
+    }
+  }
 
+  /// Same socket path the running agent uses, with a caller-supplied handler.
+  /// The UI self-test presents Settings inside `handle` and requires a reply.
+  static func runRoundTrip(
+    _ request: LaunchRequest,
+    handle: @escaping @MainActor (LaunchRequest) -> AgentReply
+  ) -> Int32 {
     // sun_path holds 104 bytes. A long NSTemporaryDirectory path would fail to bind.
     let socketPath = "/tmp/annotator-proto-\(getpid()).sock"
     socketURLOverride = URL(fileURLWithPath: socketPath)
@@ -69,23 +79,23 @@ enum AgentBridge {
     }
 
     let box = SelfTestBox()
-    guard start(handler: { request in
-      box.store(request)
-      return .success(text: "ok")
+    guard start(handler: { incoming in
+      box.store(incoming)
+      return handle(incoming)
     }) else {
       fputs("protocol self-test: could not listen\n", stderr)
       return 1
     }
 
     DispatchQueue.global(qos: .userInitiated).async {
-      box.storeReply(send(.settings))
+      box.storeReply(send(request))
     }
     let deadline = Date().addingTimeInterval(5)
     while box.reply() == nil && Date() < deadline {
       RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
     }
-    guard let reply = box.reply(), reply.ok, box.request() == .settings else {
-      fputs("protocol self-test: settings round trip failed (\(String(describing: box.reply())))\n", stderr)
+    guard let reply = box.reply(), reply.ok, box.request() == request else {
+      fputs("protocol self-test: round trip failed (\(String(describing: box.reply())))\n", stderr)
       return 1
     }
     return 0
