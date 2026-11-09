@@ -17,7 +17,10 @@ final class AnnotatorWindow: NSWindow {
 enum AnnotatorMain {
   static func main() {
     if CommandLine.arguments.contains("--protocol-self-test") {
-      exit(AgentBridge.runProtocolSelfTest())
+      let code = MainActor.assumeIsolated {
+        AgentBridge.runProtocolSelfTest()
+      }
+      exit(code)
     }
     if CommandLine.arguments.contains("--ui-self-test") {
       exit(runUISelfTest())

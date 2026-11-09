@@ -44,6 +44,7 @@ enum AgentBridge {
   }
 
   /// In-process encode, listen, and decode check. Used by `--protocol-self-test`.
+  @MainActor
   static func runProtocolSelfTest() -> Int32 {
     if LaunchRequest.parse(["AnnotatorBin", "--settings"]) != .settings {
       fputs("protocol self-test: --settings did not parse\n", stderr)
@@ -65,6 +66,7 @@ enum AgentBridge {
 
   /// Same socket path the running agent uses, with a caller-supplied handler.
   /// The UI self-test presents Settings inside `handle` and requires a reply.
+  @MainActor
   static func runRoundTrip(
     _ request: LaunchRequest,
     handle: @escaping @MainActor (LaunchRequest) -> AgentReply
@@ -231,13 +233,21 @@ private final class Server {
     // screencapture run loop can still accept this work without deadlocking.
     setTimeout(client, seconds: 180)
     let handler = self.handler
-    DispatchQueue.main.async {
-      let reply = MainActor.assumeIsolated {
-        handler?(request) ?? .failure("Annotator is not running.")
-      }
-      self.writeReply(client, reply)
-      close(client)
+    let finish: @MainActor () -> AgentReply = {
+      handler?(request) ?? .failure("Annotator is not running.")
     }
+    // Sync onto the main actor. An async hop deadlocks the in-process self-test:
+    // its main thread is inside the run loop waiting for this reply.
+    let reply: AgentReply
+    if Thread.isMainThread {
+      reply = MainActor.assumeIsolated(finish)
+    } else {
+      reply = DispatchQueue.main.sync {
+        MainActor.assumeIsolated(finish)
+      }
+    }
+    self.writeReply(client, reply)
+    close(client)
   }
 
   private func writeReply(_ fd: Int32, _ reply: AgentReply) {
