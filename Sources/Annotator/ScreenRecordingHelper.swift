@@ -268,12 +268,6 @@ enum ScreenRecordingHelper {
     window.contentView?.layoutSubtreeIfNeeded()
     RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.4))
     let shown = interfaceStrings(in: window)
-    for phrase in ["One quick update", "Open Screen Recording Settings", "Remind me later", "Remove the old Annotator"] {
-      if !shown.contains(where: { $0.localizedCaseInsensitiveContains(phrase) }) {
-        fputs("screen recording self-test: missing \(phrase)\n\(shown.joined(separator: "\n"))\n", stderr)
-        return 1
-      }
-    }
     guard let rep = bitmap(of: window.contentView),
           let data = rep.representation(using: .png, properties: [:])
     else {
@@ -283,7 +277,14 @@ enum ScreenRecordingHelper {
     let windowURL = directory.appendingPathComponent("window-light.png")
     do {
       try data.write(to: windowURL, options: .atomic)
-      try requireText(["One quick update", "Open Screen Recording Settings", "Remind me later"], in: windowURL)
+      let painted = try recognizedText(in: windowURL)
+      let visible = (shown + [painted]).joined(separator: "\n")
+      for phrase in ["One quick update", "Open Screen Recording Settings", "Remind me later", "Remove the old Annotator"] {
+        if !visible.localizedCaseInsensitiveContains(phrase) {
+          fputs("screen recording self-test: missing \(phrase)\n\(visible)\n", stderr)
+          return 1
+        }
+      }
       try requireText(["One quick update", "Remind me later"], in: directory.appendingPathComponent("initial-light.png"))
       try requireText(["One quick update", "Remind me later"], in: directory.appendingPathComponent("initial-dark.png"))
       try requireText(["Open Settings again", "Waiting for permission"], in: directory.appendingPathComponent("waiting.png"))
@@ -360,37 +361,39 @@ enum ScreenRecordingHelper {
   /// VoiceOver reads the accessibility tree, and the PNG is what was painted.
   private static func interfaceStrings(in window: NSWindow) -> [String] {
     var values: [String] = []
-    if let content = window.contentView {
-      var seen = Set<ObjectIdentifier>()
-      func visit(_ object: NSObject) {
-        if !seen.insert(ObjectIdentifier(object)).inserted { return }
-        if let label = object.accessibilityLabel(), !label.isEmpty {
+    var seen = Set<ObjectIdentifier>()
+    func visit(_ object: AnyObject) {
+      guard seen.insert(ObjectIdentifier(object)).inserted else { return }
+      // Xcode 26 moved these accessors off NSObject and onto the accessibility protocol.
+      if let element = object as? NSAccessibilityElementProtocol {
+        if let label = element.accessibilityLabel(), !label.isEmpty {
           values.append(label)
         }
-        if let value = object.accessibilityValue() as? String, !value.isEmpty {
+        if let value = element.accessibilityValue() as? String, !value.isEmpty {
           values.append(value)
         }
-        if let text = object as? NSTextField, !text.stringValue.isEmpty {
-          values.append(text.stringValue)
-        }
-        if let button = object as? NSButton, !button.title.isEmpty {
-          values.append(button.title)
-        }
-        for child in object.accessibilityChildren() ?? [] {
-          if let child = child as? NSObject {
+        for child in element.accessibilityChildren() ?? [] {
+          if let child = child as? AnyObject {
             visit(child)
           }
         }
-        if let view = object as? NSView {
-          for subview in view.subviews {
-            visit(subview)
-          }
+      }
+      if let view = object as? NSView {
+        if let text = view as? NSTextField, !text.stringValue.isEmpty {
+          values.append(text.stringValue)
+        }
+        if let button = view as? NSButton, !button.title.isEmpty {
+          values.append(button.title)
+        }
+        for subview in view.subviews {
+          visit(subview)
         }
       }
+    }
+    if let content = window.contentView {
       visit(content)
     }
-    let application = AXUIElementCreateApplication(getpid())
-    values.append(contentsOf: axStrings(application, depth: 0))
+    values.append(contentsOf: axStrings(AXUIElementCreateApplication(getpid()), depth: 0))
     return values
   }
 
@@ -416,18 +419,19 @@ enum ScreenRecordingHelper {
     return values
   }
 
-  private static func requireText(_ phrases: [String], in url: URL) throws {
+  private static func recognizedText(in url: URL) throws -> String {
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = .accurate
     request.usesLanguageCorrection = false
     let handler = VNImageRequestHandler(url: url, options: [:])
     try handler.perform([request])
-    let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
-    let text = lines.joined(separator: "\n")
-    let folded = text.replacingOccurrences(of: " ", with: "").lowercased()
+    return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+  }
+
+  private static func requireText(_ phrases: [String], in url: URL) throws {
+    let text = try recognizedText(in: url)
     for phrase in phrases {
-      let needle = phrase.replacingOccurrences(of: " ", with: "").lowercased()
-      if !folded.contains(needle) {
+      if !text.localizedCaseInsensitiveContains(phrase) {
         throw NSError(
           domain: "Annotator",
           code: 2,
