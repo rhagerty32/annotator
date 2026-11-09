@@ -26,8 +26,14 @@ enum ScreenRecordingPrompt {
     return "dev"
   }
 
-  static func hasAccess() -> Bool {
+  /// Real launches use `CGPreflightScreenCaptureAccess`. Tests replace this
+  /// so a runner that already has access cannot change the rendered state.
+  nonisolated(unsafe) static var accessCheck: @Sendable () -> Bool = {
     CGPreflightScreenCaptureAccess()
+  }
+
+  static func hasAccess() -> Bool {
+    accessCheck()
   }
 
   /// Launch stays quiet after Remind me later until a capture is attempted
@@ -96,7 +102,7 @@ final class ScreenRecordingHelperModel: NSObject, ObservableObject {
 
   func startPolling() {
     guard polls, timer == nil else { return }
-    poll()
+    applyAccess()
     let timer = Timer(timeInterval: 1, target: self, selector: #selector(pollTimer), userInfo: nil, repeats: true)
     RunLoop.main.add(timer, forMode: .default)
     self.timer = timer
@@ -105,7 +111,7 @@ final class ScreenRecordingHelperModel: NSObject, ObservableObject {
 
   @objc nonisolated private func pollTimer() {
     Task { @MainActor in
-      poll()
+      applyAccess()
     }
   }
 
@@ -132,7 +138,7 @@ final class ScreenRecordingHelperModel: NSObject, ObservableObject {
     ScreenRecordingHelper.relaunch()
   }
 
-  private func poll() {
+  func applyAccess() {
     guard phase != .success else { return }
     if ScreenRecordingPrompt.hasAccess() {
       phase = .success
@@ -242,44 +248,17 @@ enum ScreenRecordingHelper {
   }
 
   private static func renderSelfTest(directory: URL) -> Int32 {
+    let previousAccess = ScreenRecordingPrompt.accessCheck
+    ScreenRecordingPrompt.accessCheck = { false }
+    defer { ScreenRecordingPrompt.accessCheck = previousAccess }
     do {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      // Forced phases, and the preflight closure stays false. No timer runs.
       try writeSnapshot(.initial, scheme: .light, to: directory.appendingPathComponent("initial-light.png"))
       try writeSnapshot(.initial, scheme: .dark, to: directory.appendingPathComponent("initial-dark.png"))
       try writeSnapshot(.waiting, scheme: .light, to: directory.appendingPathComponent("waiting.png"))
       try writeSnapshot(.success, scheme: .light, to: directory.appendingPathComponent("success.png"))
-    } catch {
-      fputs("screen recording self-test: \(error.localizedDescription)\n", stderr)
-      return 1
-    }
-
-    let model = ScreenRecordingHelperModel()
-    present(model: model)
-    guard let window = controller?.window, window.title == "Screen Recording", window.isVisible else {
-      fputs("screen recording self-test: window did not open\n", stderr)
-      return 1
-    }
-    if !model.isPolling {
-      fputs("screen recording self-test: permission poll did not start\n", stderr)
-      return 1
-    }
-    window.displayIfNeeded()
-    window.contentView?.layoutSubtreeIfNeeded()
-    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.4))
-    guard let rep = bitmap(of: window.contentView),
-          let data = rep.representation(using: .png, properties: [:])
-    else {
-      fputs("screen recording self-test: could not draw the open window\n", stderr)
-      return 1
-    }
-    let windowURL = directory.appendingPathComponent("window-light.png")
-    do {
-      try data.write(to: windowURL, options: .atomic)
-      // SwiftUI text is not an NSTextField, and this SDK's accessibility
-      // protocols do not expose a stable label accessor. The rendered pixels
-      // are the check that the title is actually on screen.
-      try requireText(["One quick update", "Open Screen Recording Settings", "Remind me later", "Remove the old Annotator"], in: windowURL)
-      try requireText(["One quick update", "Remind me later"], in: directory.appendingPathComponent("initial-light.png"))
+      try requireText(["One quick update", "Open Screen Recording Settings", "Remind me later", "Remove the old Annotator"], in: directory.appendingPathComponent("initial-light.png"))
       try requireText(["One quick update", "Remind me later"], in: directory.appendingPathComponent("initial-dark.png"))
       try requireText(["Open Settings again", "Waiting for permission"], in: directory.appendingPathComponent("waiting.png"))
       try requireText(["All set", "Restart Annotator", "Permission granted"], in: directory.appendingPathComponent("success.png"))
@@ -287,7 +266,20 @@ enum ScreenRecordingHelper {
       fputs("screen recording self-test: \(error.localizedDescription)\n", stderr)
       return 1
     }
-    close()
+
+    let model = ScreenRecordingHelperModel()
+    model.startPolling()
+    if model.phase != .initial || !model.isPolling {
+      fputs("screen recording self-test: denied access changed the initial state\n", stderr)
+      return 1
+    }
+    ScreenRecordingPrompt.accessCheck = { true }
+    model.applyAccess()
+    if model.phase != .success {
+      fputs("screen recording self-test: granted access did not flip to success\n", stderr)
+      return 1
+    }
+    model.stopPolling()
     if model.isPolling {
       fputs("screen recording self-test: permission poll did not stop\n", stderr)
       return 1

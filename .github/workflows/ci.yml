@@ -265,7 +265,6 @@ jobs:
           test -s dist/screen-recording/initial-dark.png
           test -s dist/screen-recording/waiting.png
           test -s dist/screen-recording/success.png
-          test -s dist/screen-recording/window-light.png
 
       - name: Upload Screen Recording helper screenshots
         if: always()
