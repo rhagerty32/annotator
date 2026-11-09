@@ -63,6 +63,24 @@ npm --prefix raycast run build   # Raycast extension only
 
 Binaries: `.build/release/Annotator` and `.build/release/Capture`.
 
+### App icon and disk image
+
+Ink Trio is the app icon and the drag-to-Applications disk image.
+
+- `assets/icon/ink-trio.png` is the approved 1024 precomposed master. Raycast uses this file.
+- `assets/icon/ink-trio.svg` is the vector source. The glass, enamel, and blur live in the raster master.
+- `assets/icon/AppIcon-1024.png` is the full-bleed system icon. The dark field fills the square so macOS can mask it.
+- `assets/dmg/background.png` (720x440) and `background@2x.png` (1440x880) are the Finder window art. `background.tiff` is the HiDPI image.
+
+```bash
+python3 scripts/generate-icons.py
+python3 scripts/package-dmg.py
+```
+
+`scripts/generate-raycast-icon.swift` copies the master into `raycast/assets/icon.png` (or resamples it). It does not redraw the materials.
+
+On macOS, `package-dmg.py` builds the app, ad-hoc signs it, and writes `dist/Annotator.dmg`. The Finder window content is 720 by 440 points, icons are 128 points, text is 13 points, Annotator.app is centered at (200, 230), and the Applications alias is centered at (520, 230).
+
 Quick try without Raycast:
 
 ```bash

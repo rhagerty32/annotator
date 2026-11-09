@@ -3,6 +3,8 @@
   "private": true,
   "scripts": {
     "build:annotator": "bash scripts/build.sh",
+    "icons": "python3 scripts/generate-icons.py",
+    "package:dmg": "python3 scripts/package-dmg.py",
     "build:raycast": "npm --prefix raycast run build",
     "dev": "npm --prefix raycast run dev",
     "dev:raycast": "npm --prefix raycast run dev",
