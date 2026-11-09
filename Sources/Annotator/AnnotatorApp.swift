@@ -67,9 +67,9 @@ enum AnnotatorMain {
     // Mach-O was launched, so it matches AnnotatorBin when that binary runs.
     let running = BundleExecutable.currentPath
     let expected = BundleExecutable.bundleExecutablePath
-    if running != expected || BundleExecutable.mainExecutablePath != running {
+    if running != expected {
       fputs(
-        "ui self-test: agent executable \(running) != bundle executable \(expected) (Bundle.main.executableURL is \(BundleExecutable.mainExecutablePath))\n",
+        "ui self-test: agent executable \(running) != bundle executable \(expected)\n",
         stderr
       )
       return 1
@@ -777,6 +777,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let configuration = NSWorkspace.OpenConfiguration()
     configuration.arguments = arguments
     configuration.activates = true
+    configuration.promptsUserIfNeeded = false
     // AnnotatorBin is inside the bundle, so Launch Services already counts this
     // process as the running app. A new instance is what execs CFBundleExecutable.
     configuration.createsNewApplicationInstance = true

@@ -158,7 +158,89 @@ jobs:
             echo "::error::AnnotatorBin --ui-self-test passed; the agent must be CFBundleExecutable"
             exit 1
           fi
-          echo "${ui_bin}" | grep -q "bundle executable"
+          UI_BIN="${ui_bin}" python3 - <<'PY'
+          import os, sys
+          text = os.environ["UI_BIN"]
+          marker = "!= bundle executable "
+          lines = [line for line in text.splitlines() if marker in line]
+          if not lines:
+              sys.exit("missing bundle executable assertion:\n" + text)
+          line = lines[-1]
+          left, right = line.split(marker, 1)
+          right = right.strip()
+          if "/Contents/MacOS/AnnotatorBin" not in left:
+              sys.exit("running image was not AnnotatorBin:\n" + line)
+          if not right.endswith("/Contents/MacOS/Annotator") or right.endswith("AnnotatorBin"):
+              sys.exit("expected path was not CFBundleExecutable:\n" + line)
+          print("AnnotatorBin self-test expected", right)
+          PY
+          # Cold start: AnnotatorBin must open the bundle executable and exit.
+          # The process that stays up is Contents/MacOS/Annotator.
+          support="${HOME}/Library/Application Support/Annotator"
+          rm -f "${support}/agent.sock"
+          if pgrep -x Annotator >/dev/null 2>&1 || pgrep -x AnnotatorBin >/dev/null 2>&1; then
+            pkill -x Annotator || true
+            pkill -x AnnotatorBin || true
+            sleep 0.5
+          fi
+          set +e
+          handoff="$(dist/Annotator.app/Contents/MacOS/AnnotatorBin --settings 2>&1)"
+          handoff_status=$?
+          set -e
+          printf '%s\n' "${handoff}"
+          if [[ "${handoff_status}" -ne 0 ]]; then
+            echo "::error::AnnotatorBin --settings did not hand off to the bundle executable"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import os, signal, subprocess, sys, time
+
+          def pids(name):
+              found = subprocess.run(["pgrep", "-x", name], capture_output=True, text=True)
+              if found.returncode != 0:
+                  return []
+              return [int(line) for line in found.stdout.split() if line.strip()]
+
+          def executable(pid):
+              listed = subprocess.run(
+                  ["lsof", "-a", "-p", str(pid), "-d", "txt", "-Fn"],
+                  capture_output=True,
+                  text=True,
+              )
+              paths = [line[1:] for line in (listed.stdout or "").splitlines() if line.startswith("n")]
+              for path in paths:
+                  if path.endswith("/Contents/MacOS/Annotator") or path.endswith("/Contents/MacOS/AnnotatorBin"):
+                      return path
+              command = subprocess.run(
+                  ["ps", "-ww", "-p", str(pid), "-o", "command="],
+                  capture_output=True,
+                  text=True,
+              )
+              return (command.stdout or "").strip().split(" ", 1)[0]
+
+          deadline = time.time() + 5
+          agent_pids = []
+          while time.time() < deadline:
+              agent_pids = pids("Annotator")
+              if agent_pids and not pids("AnnotatorBin"):
+                  break
+              time.sleep(0.2)
+          bin_pids = pids("AnnotatorBin")
+          print("Annotator pids", agent_pids)
+          print("AnnotatorBin pids", bin_pids)
+          paths = {pid: executable(pid) for pid in agent_pids}
+          for pid, path in paths.items():
+              print(pid, path)
+          if bin_pids:
+              sys.exit("AnnotatorBin stayed up as the agent")
+          wanted = "/Contents/MacOS/Annotator"
+          agents = [path for path in paths.values() if path.endswith(wanted) and not path.endswith("AnnotatorBin")]
+          if len(agents) != 1:
+              sys.exit("expected one agent at " + wanted + ", found " + repr(list(paths.values())))
+          print("cold-start agent", agents[0])
+          for pid in agent_pids:
+              os.kill(pid, signal.SIGTERM)
+          PY
           python3 - <<'PY'
           import subprocess, sys
           log = subprocess.run(
