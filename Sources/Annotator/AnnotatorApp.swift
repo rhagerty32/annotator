@@ -62,12 +62,16 @@ enum AnnotatorMain {
   @MainActor
   private static func exercisePackagedUI() -> Int32 {
     // MenuBarAgent on the CI runner does not reject a foreign image, so a
-    // passing AnnotatorBin status item is not evidence. The agent process
-    // must be the bundle's CFBundleExecutable.
+    // passing AnnotatorBin status item is not evidence. Compare with the
+    // Info.plist executable. Bundle.main.executableURL follows whichever
+    // Mach-O was launched, so it matches AnnotatorBin when that binary runs.
     let running = BundleExecutable.currentPath
     let expected = BundleExecutable.bundleExecutablePath
-    if !BundleExecutable.isBundleExecutable || running != expected {
-      fputs("ui self-test: agent executable \(running) != bundle executable \(expected)\n", stderr)
+    if running != expected || BundleExecutable.mainExecutablePath != running {
+      fputs(
+        "ui self-test: agent executable \(running) != bundle executable \(expected) (Bundle.main.executableURL is \(BundleExecutable.mainExecutablePath))\n",
+        stderr
+      )
       return 1
     }
     // Same order as the agent: status item first, then Settings. An exception

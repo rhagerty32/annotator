@@ -35,15 +35,30 @@ enum BundleExecutable {
     }
   }
 
-  /// Resolved path of this process. Compared with `Bundle.main.executableURL`.
+  /// Resolved path of this process.
   static var currentPath: String {
     resolved(currentURL).path
   }
 
-  /// `nil` when this process is not inside an application bundle.
+  /// `Bundle.main.executableURL` follows the running image. Inside an app,
+  /// running `AnnotatorBin` makes that URL `AnnotatorBin`, not the
+  /// `CFBundleExecutable` named in Info.plist. The agent check uses the plist.
+  static var mainExecutablePath: String {
+    guard let url = Bundle.main.executableURL else { return "none" }
+    return resolved(url).path
+  }
+
+  /// `Contents/MacOS/<CFBundleExecutable>`, or nil outside an application bundle.
   static var bundleExecutableURL: URL? {
-    guard Bundle.main.bundleURL.pathExtension == "app" else { return nil }
-    return Bundle.main.executableURL
+    guard Bundle.main.bundleURL.pathExtension == "app",
+          let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleExecutable") as? String,
+          !name.isEmpty
+    else {
+      return nil
+    }
+    return Bundle.main.bundleURL
+      .appendingPathComponent("Contents/MacOS", isDirectory: true)
+      .appendingPathComponent(name)
   }
 
   static var bundleExecutablePath: String {
@@ -54,12 +69,7 @@ enum BundleExecutable {
   /// True only for the Mach-O named by `CFBundleExecutable`.
   static var isBundleExecutable: Bool {
     guard let expected = bundleExecutableURL else { return false }
-    guard resolved(currentURL).path == resolved(expected).path else { return false }
-    if let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleExecutable") as? String,
-       !name.isEmpty {
-      return currentURL.lastPathComponent == name
-    }
-    return true
+    return resolved(currentURL).path == resolved(expected).path
   }
 
   /// App to open when this process must not stay up as the agent.

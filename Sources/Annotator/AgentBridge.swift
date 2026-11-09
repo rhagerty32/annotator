@@ -79,8 +79,13 @@ enum AgentBridge {
     }
     if Bundle.main.bundleURL.pathExtension == "app" {
       let name = BundleExecutable.currentURL.lastPathComponent
-      if name == "AnnotatorBin" && BundleExecutable.isBundleExecutable {
-        fputs("protocol self-test: AnnotatorBin was treated as CFBundleExecutable\n", stderr)
+      if name == "AnnotatorBin"
+        && (BundleExecutable.isBundleExecutable
+          || !BundleExecutable.bundleExecutablePath.hasSuffix("/Contents/MacOS/Annotator")) {
+        fputs(
+          "protocol self-test: CFBundleExecutable resolved to \(BundleExecutable.bundleExecutablePath)\n",
+          stderr
+        )
         return 1
       }
       if name == "Annotator" && !BundleExecutable.isBundleExecutable {
