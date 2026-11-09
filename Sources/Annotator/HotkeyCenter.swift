@@ -125,7 +125,7 @@ private func readHotKeyID(_ event: EventRef) -> EventHotKeyID? {
       EventParamName(kEventParamDirectObject),
       EventParamType(typeEventHotKeyID),
       nil,
-      ByteCount(buffer.count),
+      numericCast(buffer.count),
       nil,
       buffer.baseAddress
     )

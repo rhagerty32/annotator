@@ -40,8 +40,8 @@ jobs:
 
       - name: Select Xcode 26
         run: |
-          # macos-15 boots on Xcode 16.4. ToolbarSpacer and ByteCount come from
-          # the macOS 26 SDK, which is installed beside the default toolchain.
+          # macos-15 boots on Xcode 16.4. ToolbarSpacer is in the macOS 26 SDK,
+          # which is installed beside the default toolchain.
           shopt -s nullglob
           apps=(/Applications/Xcode_26*.app)
           if [[ ${#apps[@]} -eq 0 ]]; then
