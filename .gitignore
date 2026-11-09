@@ -2,8 +2,15 @@
 .build/
 .swiftpm/
 Package.resolved
+dist/
 raycast/node_modules/
 raycast/dist/
 raycast/raycast-env.d.ts
 *.xcodeproj/
 xcuserdata/
+*.p12
+*.p8
+*.cer
+*.mobileprovision
+sparkle-private-key*
+AuthKey_*.p8

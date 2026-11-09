@@ -14,9 +14,12 @@ interface Preferences {
   annotatorPath?: string;
 }
 
+const installedBinary = "/Applications/Annotator.app/Contents/MacOS/Annotator";
+
 export function resolveBinary(preference?: string): string | null {
   const candidates = [
     preference?.trim(),
+    installedBinary,
     join(__dirname, "../.build/release/Annotator"),
     join(__dirname, "../../.build/release/Annotator"),
     join(__dirname, "../../../.build/release/Annotator"),
@@ -61,7 +64,7 @@ export async function launchFastCapture(flags: FastCapture = {}): Promise<void> 
     await showToast({
       style: Toast.Style.Failure,
       title: "Annotator binary not found",
-      message: "Build with `npm run build:annotator` and set the preference path.",
+      message: "Install Annotator.dmg from GitHub Releases, or set the binary preference to a local build.",
     });
     return;
   }
@@ -117,7 +120,7 @@ export async function runAnnotator(
     await showToast({
       style: Toast.Style.Failure,
       title: "Annotator binary not found",
-      message: "Build with `npm run build:annotator` and set the preference path.",
+      message: "Install Annotator.dmg from GitHub Releases, or set the binary preference to a local build.",
     });
     return null;
   }

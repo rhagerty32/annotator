@@ -9,7 +9,7 @@ cd "$ROOT"
 log() { printf '→ %s\n' "$*"; }
 
 log "Building Annotator"
-swift build -c release
+bash "$ROOT/scripts/build.sh"
 
 if [[ ! -d raycast/node_modules ]]; then
   log "Installing Raycast extension deps"

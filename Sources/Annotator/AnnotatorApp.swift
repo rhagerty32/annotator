@@ -1,5 +1,6 @@
 import AppKit
 import CaptureKit
+import Sparkle
 import SwiftUI
 
 /// Plain window so AppKit will not auto-dismiss on Escape / save-panel Cancel
@@ -36,11 +37,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private var keyMonitor: Any?
   private var flagMonitor: Any?
   private var keyUpMonitor: Any?
+  /// Held for the process lifetime. Sparkle starts only for a packaged app
+  /// that has a public EdDSA key, so a source build does not raise an update alert.
+  private var updaterController: SPUStandardUpdaterController?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     if CommandLine.arguments.contains("--ocr") {
       Self.runOCRAndExit()
     }
+
+    installMenus()
 
     // Return first so the run loop is spinning before `screencapture -i`
     // (needed for last-region mouse tracking, and so the picker can appear).
@@ -57,6 +63,83 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       self.installHotkeys()
       self.showPanel()
     }
+  }
+
+  private var sparklePublicKey: String {
+    let raw = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String ?? ""
+    return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var updatesConfigured: Bool {
+    guard Bundle.main.bundleURL.pathExtension == "app" else { return false }
+    let feed = (Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String ?? "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return feed.hasPrefix("https://")
+      && !sparklePublicKey.isEmpty
+      && !sparklePublicKey.hasPrefix("REPLACE")
+  }
+
+  /// App menu and Help menu. Installed only for Annotator.app so a loose
+  /// `swift build` binary keeps the same keyboard-only editor.
+  private func installMenus() {
+    guard Bundle.main.bundleURL.pathExtension == "app" else { return }
+
+    if updatesConfigured {
+      updaterController = SPUStandardUpdaterController(
+        startingUpdater: true,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+      )
+    }
+
+    let main = NSMenu()
+
+    let appMenu = NSMenu(title: "Annotator")
+    appMenu.addItem(NSMenuItem(
+      title: "About Annotator",
+      action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+      keyEquivalent: ""
+    ))
+    appMenu.addItem(NSMenuItem.separatorItem())
+    appMenu.addItem(makeUpdateItem())
+    appMenu.addItem(NSMenuItem.separatorItem())
+    appMenu.addItem(NSMenuItem(
+      title: "Quit Annotator",
+      action: #selector(NSApplication.terminate(_:)),
+      keyEquivalent: "q"
+    ))
+    let appItem = NSMenuItem()
+    appItem.submenu = appMenu
+    main.addItem(appItem)
+
+    let helpMenu = NSMenu(title: "Help")
+    helpMenu.addItem(makeUpdateItem())
+    let helpItem = NSMenuItem()
+    helpItem.submenu = helpMenu
+    main.addItem(helpItem)
+
+    NSApp.mainMenu = main
+    NSApp.helpMenu = helpMenu
+  }
+
+  private func makeUpdateItem() -> NSMenuItem {
+    let item = NSMenuItem(title: "Check for Updates…", action: nil, keyEquivalent: "")
+    if let updaterController {
+      item.target = updaterController
+      item.action = #selector(SPUStandardUpdaterController.checkForUpdates(_:))
+    } else {
+      item.target = self
+      item.action = #selector(explainMissingUpdateKey(_:))
+    }
+    return item
+  }
+
+  @objc private func explainMissingUpdateKey(_ sender: Any?) {
+    let alert = NSAlert()
+    alert.messageText = "Updates are not set up in this build"
+    alert.informativeText = "Install the signed Annotator from GitHub Releases to check for updates. A build from source does not include the Sparkle signing key."
+    alert.addButton(withTitle: "OK")
+    alert.runModal()
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

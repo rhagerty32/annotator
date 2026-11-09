@@ -16,8 +16,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Swift (release)
-        run: swift build -c release
+      - name: Check release tooling
+        run: bash scripts/test-release-tools.sh
+
+      - name: Build Annotator.app and DMG (ad-hoc, not published)
+        run: |
+          bash scripts/package-app.sh
+          bash scripts/package-dmg.sh
+          test -x dist/Annotator.app/Contents/MacOS/Annotator
+          test -x dist/Annotator.app/Contents/MacOS/Capture
+          test -d dist/Annotator.app/Contents/Frameworks/Sparkle.framework
+          test -f dist/Annotator.dmg
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' dist/Annotator.app/Contents/Info.plist)" = "com.rhagerty32.annotator"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSUIElement' dist/Annotator.app/Contents/Info.plist)" = "true"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' dist/Annotator.app/Contents/Info.plist)" = "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' dist/Annotator.app/Contents/Info.plist)"
+          codesign --verify --strict --verbose=2 dist/Annotator.app
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -30,4 +43,4 @@ jobs:
         run: npm --prefix raycast ci
 
       - name: Type-check Raycast extension
-        run: npm --prefix raycast exec -- tsc --noEmit
+        run: npm --prefix raycast exec -- tsc --noEmit -p raycast/tsconfig.json

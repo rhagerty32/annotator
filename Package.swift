@@ -8,6 +8,10 @@ let package = Package(
     .executable(name: "Annotator", targets: ["Annotator"]),
     .executable(name: "Capture", targets: ["Capture"]),
   ],
+  dependencies: [
+    // Keep in sync with packaging/sparkle-version.
+    .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.1"),
+  ],
   targets: [
     .target(
       name: "CaptureKit",
@@ -20,7 +24,10 @@ let package = Package(
     ),
     .executableTarget(
       name: "Annotator",
-      dependencies: ["CaptureKit"],
+      dependencies: [
+        "CaptureKit",
+        .product(name: "Sparkle", package: "Sparkle"),
+      ],
       path: "Sources/Annotator"
     ),
   ]

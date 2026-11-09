@@ -27,7 +27,13 @@ npm run build:annotator
 ```
 
 That runs `swift build -c release` and leaves executables at
-`.build/release/Annotator` and `.build/release/Capture`.
+`.build/release/Annotator` and `.build/release/Capture`, with Sparkle.framework
+beside them so the editor can launch.
+
+`npm run package:app` builds `dist/Annotator.app` (ad-hoc signed). That local
+bundle is for trying the menu bar and the Capture helper. It is not notarized
+and must not be attached to a GitHub Release. Signed releases are described in
+[docs/release.md](docs/release.md).
 
 ### Raycast extension
 
@@ -44,9 +50,11 @@ installed locally):
 ```
 
 Import the extension from Raycast’s command palette (**Import Extension** →
-choose the `raycast` folder in this repo). If the binary is not auto-detected,
-set **Annotator binary** in extension preferences to the absolute path of
-`.build/release/Annotator`.
+choose the `raycast` folder in this repo). The default **Annotator binary**
+preference is `/Applications/Annotator.app/Contents/MacOS/Annotator`. To test a
+binary you just built, set that preference to the absolute path of
+`.build/release/Annotator`. If the Applications path is missing, the extension
+still tries the `.build/release` locations.
 
 ### Quick manual test
 
@@ -95,8 +103,10 @@ Maintainers may squash-merge. You do not need to force-push unless asked.
 - Follow existing patterns in the file you edit.
 - Prefer clear names over abbreviations; keep view logic in SwiftUI where the
   project already does.
-- No third-party Swift dependencies — stay within the standard library,
-  AppKit, SwiftUI, and system frameworks (e.g. Vision for OCR).
+- No third-party Swift dependencies beyond Sparkle, which ships in-app updates.
+  Stay within the standard library, AppKit, SwiftUI, system frameworks
+  (e.g. Vision for OCR), and Sparkle.
+- Do not commit certificates, `.p12` / `.p8` files, or the Sparkle EdDSA private key.
 - Run `swift build` (debug is fine) before pushing.
 
 ### TypeScript (`raycast/src/`)

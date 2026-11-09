@@ -61,11 +61,11 @@
     {
       "name": "annotatorPath",
       "title": "Annotator binary",
-      "description": "Absolute path to the Annotator executable (swift build -c release).",
+      "description": "Absolute path to the Annotator executable. Defaults to the app installed from the DMG. Override this to use a binary built from source.",
       "type": "textfield",
       "required": false,
-      "default": "",
-      "placeholder": "/Users/you/…/annotator/.build/release/Annotator"
+      "default": "/Applications/Annotator.app/Contents/MacOS/Annotator",
+      "placeholder": "/Applications/Annotator.app/Contents/MacOS/Annotator"
     }
   ],
   "dependencies": {

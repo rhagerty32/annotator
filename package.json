@@ -3,6 +3,8 @@
   "private": true,
   "scripts": {
     "build:annotator": "bash scripts/build.sh",
+    "package:app": "bash scripts/package-app.sh",
+    "package:dmg": "bash scripts/package-dmg.sh",
     "build:raycast": "npm --prefix raycast run build",
     "dev": "npm --prefix raycast run dev",
     "dev:raycast": "npm --prefix raycast run dev",
