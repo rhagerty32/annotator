@@ -37,7 +37,9 @@ enum AnnotatorMain {
     app.setActivationPolicy(.accessory)
     let box = UITestBox()
     DispatchQueue.main.async {
-      box.code = exercisePackagedUI()
+      box.code = MainActor.assumeIsolated {
+        exercisePackagedUI()
+      }
       app.stop(nil)
       if let event = NSEvent.otherEvent(
         with: .applicationDefined,
@@ -57,6 +59,7 @@ enum AnnotatorMain {
     return box.code
   }
 
+  @MainActor
   private static func exercisePackagedUI() -> Int32 {
     MenuBarController.shared.install()
     let code = AgentBridge.runRoundTrip(.settings) { _ in
@@ -502,7 +505,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     MenuBarController.shared.onSettings = {
       DispatchQueue.main.async {
         MainActor.assumeIsolated {
-          SettingsWindow.show()
+          _ = SettingsWindow.show()
         }
       }
     }
