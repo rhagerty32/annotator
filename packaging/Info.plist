@@ -36,5 +36,7 @@
   <integer>86400</integer>
   <key>SUAllowsAutomaticUpdates</key>
   <true/>
+  <key>SUPublicEDKey</key>
+  <string>6v34IiiW/qeZcwV+UIC7dZGbCBnZF7f50G2kkltlFyU=</string>
 </dict>
 </plist>
