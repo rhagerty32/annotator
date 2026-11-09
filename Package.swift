@@ -23,9 +23,18 @@ let package = Package(
       dependencies: ["CaptureKit"],
       path: "Sources/Capture"
     ),
+    .target(
+      name: "AppKitShims",
+      path: "Sources/AppKitShims",
+      publicHeadersPath: "include",
+      linkerSettings: [
+        .linkedFramework("Foundation"),
+      ]
+    ),
     .executableTarget(
       name: "Annotator",
       dependencies: [
+        "AppKitShims",
         "CaptureKit",
         .product(name: "Sparkle", package: "Sparkle"),
       ],

@@ -1,4 +1,5 @@
 import AppKit
+import AppKitShims
 import SwiftUI
 
 @MainActor
@@ -372,11 +373,17 @@ final class RecorderView: NSView {
 enum SettingsWindow {
   private static var controller: Controller?
 
-  static func show() {
+  static var isWindowVisible: Bool {
+    controller?.window?.isVisible == true
+  }
+
+  /// False when AppKit rejects the window configuration. Never raises.
+  @discardableResult
+  static func show() -> Bool {
     if controller == nil {
       controller = Controller()
     }
-    controller?.show()
+    return controller?.show() ?? false
   }
 
   final class Controller: NSWindowController, NSWindowDelegate {
@@ -391,7 +398,7 @@ enum SettingsWindow {
       window.styleMask = [.titled, .closable, .miniaturizable]
       window.isReleasedWhenClosed = false
       window.level = .floating
-      window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+      window.collectionBehavior = WindowBehavior.allSpaces
       window.titlebarAppearsTransparent = false
       super.init(window: window)
       window.delegate = self
@@ -407,20 +414,29 @@ enum SettingsWindow {
       fatalError("init(coder:) has not been implemented")
     }
 
-    func show() {
+    @discardableResult
+    func show() -> Bool {
       model.refreshLogin()
-      guard let window else { return }
-      // Stay an accessory app. Switching back to .accessory after ordering the
-      // window front was hiding Settings again on the next turn.
-      window.level = .floating
-      window.hidesOnDeactivate = false
-      window.collectionBehavior.formUnion([.canJoinAllSpaces, .fullScreenAuxiliary, .moveToActiveSpace])
-      if window.isMiniaturized {
-        window.deminiaturize(nil)
+      guard let window else { return false }
+      // Stay accessory. canJoinAllSpaces must not be combined with moveToActiveSpace:
+      // that pair raises NSInternalInconsistencyException and skips the agent reply.
+      let problem = AnnotatorCatchException {
+        window.level = .floating
+        window.hidesOnDeactivate = false
+        window.collectionBehavior = WindowBehavior.allSpaces
+        if window.isMiniaturized {
+          window.deminiaturize(nil)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
       }
-      NSApp.activate(ignoringOtherApps: true)
-      window.makeKeyAndOrderFront(nil)
-      window.orderFrontRegardless()
+      if let problem {
+        let reason = problem.reason ?? problem.name.rawValue
+        fputs("Annotator: could not present Settings: \(reason)\n", stderr)
+        return false
+      }
+      return true
     }
 
     func windowWillClose(_ notification: Notification) {

@@ -41,7 +41,7 @@ final class OCRHUDController: ObservableObject {
     panel.backgroundColor = .clear
     panel.hasShadow = false
     panel.level = .statusBar
-    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+    panel.collectionBehavior = WindowBehavior.stationaryHUD
     panel.ignoresMouseEvents = true
     panel.isReleasedWhenClosed = false
     panel.appearance = NSAppearance(named: .darkAqua)

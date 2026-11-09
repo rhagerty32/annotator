@@ -140,3 +140,5 @@ jobs:
           python3 scripts/package-dmg.py --app-only
           dist/Annotator.app/Contents/MacOS/AnnotatorBin --protocol-self-test
           dist/Annotator.app/Contents/MacOS/Annotator --protocol-self-test
+          dist/Annotator.app/Contents/MacOS/AnnotatorBin --ui-self-test
+          dist/Annotator.app/Contents/MacOS/Annotator --ui-self-test
