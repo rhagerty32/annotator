@@ -16,15 +16,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Pillow
+      - name: Install packaging Python packages
         run: |
-          # package-dmg.py runs generate-icons.py with this python3. The runner
-          # image's Homebrew Python does not ship Pillow, and that interpreter
-          # is externally managed, so install into a venv and put it first on PATH.
+          # Homebrew Python on this image is externally managed and does not
+          # ship the modules package-dmg.py and generate-icons.py import.
           python3 -m venv "${RUNNER_TEMP}/icon-python"
-          "${RUNNER_TEMP}/icon-python/bin/pip" install --disable-pip-version-check 'Pillow==13.0.0'
+          "${RUNNER_TEMP}/icon-python/bin/pip" install --disable-pip-version-check \
+            -r scripts/packaging-requirements.txt
           echo "${RUNNER_TEMP}/icon-python/bin" >> "${GITHUB_PATH}"
-          "${RUNNER_TEMP}/icon-python/bin/python" -c 'import PIL, sys; print(sys.executable); print("Pillow", PIL.__version__)'
+          "${RUNNER_TEMP}/icon-python/bin/python" - <<'PY'
+          import ast
+          import sys
+          from pathlib import Path
+
+          stdlib = sys.stdlib_module_names
+          modules = set()
+          for path in (
+              Path("scripts/generate-icons.py"),
+              Path("scripts/package-dmg.py"),
+              Path("scripts/write_appcast.py"),
+          ):
+              tree = ast.parse(path.read_text())
+              for node in ast.walk(tree):
+                  if isinstance(node, ast.Import):
+                      for alias in node.names:
+                          modules.add(alias.name.split(".")[0])
+                  elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                      modules.add(node.module.split(".")[0])
+          third_party = sorted(modules - stdlib)
+          missing = []
+          for name in third_party:
+              try:
+                  __import__(name)
+              except ModuleNotFoundError:
+                  missing.append(name)
+          print(sys.executable)
+          print("packaging imports:", ", ".join(third_party))
+          if missing:
+              raise SystemExit("missing packaging imports: " + ", ".join(missing))
+          PY
 
       - name: Generate icons
         run: python3 scripts/generate-icons.py
