@@ -134,3 +134,9 @@ jobs:
         working-directory: raycast
         # npm exec swallows --noEmit and tsc prints its help instead of checking.
         run: ./node_modules/.bin/tsc --noEmit
+
+      - name: Package the app and test the settings handoff
+        run: |
+          python3 scripts/package-dmg.py --app-only
+          dist/Annotator.app/Contents/MacOS/AnnotatorBin --protocol-self-test
+          dist/Annotator.app/Contents/MacOS/Annotator --protocol-self-test

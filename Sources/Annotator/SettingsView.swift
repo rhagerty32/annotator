@@ -410,29 +410,17 @@ enum SettingsWindow {
     func show() {
       model.refreshLogin()
       guard let window else { return }
-      // Accessory apps stay out of the Dock. A plain order-front leaves the
-      // window behind whatever is already active, so take focus, then drop
-      // back to accessory without ordering the window out.
+      // Stay an accessory app. Switching back to .accessory after ordering the
+      // window front was hiding Settings again on the next turn.
       window.level = .floating
       window.hidesOnDeactivate = false
       window.collectionBehavior.formUnion([.canJoinAllSpaces, .fullScreenAuxiliary, .moveToActiveSpace])
       if window.isMiniaturized {
         window.deminiaturize(nil)
       }
-      let wasAccessory = NSApp.activationPolicy() == .accessory
-      if wasAccessory {
-        NSApp.setActivationPolicy(.regular)
-      }
       NSApp.activate(ignoringOtherApps: true)
       window.makeKeyAndOrderFront(nil)
       window.orderFrontRegardless()
-      if wasAccessory {
-        DispatchQueue.main.async {
-          NSApp.setActivationPolicy(.accessory)
-          window.level = .floating
-          window.orderFrontRegardless()
-        }
-      }
     }
 
     func windowWillClose(_ notification: Notification) {

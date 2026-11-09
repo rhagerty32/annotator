@@ -576,6 +576,7 @@ def verify_dmg(path: Path) -> None:
 
 
 def main() -> None:
+    app_only = "--app-only" in sys.argv
     os.chdir(ROOT)
     generate_icons()
     with tempfile.TemporaryDirectory(prefix="annotator-dmg-") as tmp:
@@ -592,6 +593,9 @@ def main() -> None:
         if sys.platform == "darwin" and signing_identity() != "-" and notarization_env() is not None:
             notarize(app)
         publish_app(app)
+        if app_only:
+            print(f"Wrote {DIST.parent / 'Annotator.app'}")
+            return
         output = work / "Annotator.dmg"
         if sys.platform == "darwin":
             build_macos(stage, output)
