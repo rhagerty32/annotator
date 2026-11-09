@@ -1,6 +1,5 @@
 import AppKit
 import AppKitShims
-import ApplicationServices
 import CaptureKit
 import CoreGraphics
 import Foundation
@@ -267,7 +266,6 @@ enum ScreenRecordingHelper {
     window.displayIfNeeded()
     window.contentView?.layoutSubtreeIfNeeded()
     RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.4))
-    let shown = interfaceStrings(in: window)
     guard let rep = bitmap(of: window.contentView),
           let data = rep.representation(using: .png, properties: [:])
     else {
@@ -277,14 +275,10 @@ enum ScreenRecordingHelper {
     let windowURL = directory.appendingPathComponent("window-light.png")
     do {
       try data.write(to: windowURL, options: .atomic)
-      let painted = try recognizedText(in: windowURL)
-      let visible = (shown + [painted]).joined(separator: "\n")
-      for phrase in ["One quick update", "Open Screen Recording Settings", "Remind me later", "Remove the old Annotator"] {
-        if !visible.localizedCaseInsensitiveContains(phrase) {
-          fputs("screen recording self-test: missing \(phrase)\n\(visible)\n", stderr)
-          return 1
-        }
-      }
+      // SwiftUI text is not an NSTextField, and this SDK's accessibility
+      // protocols do not expose a stable label accessor. The rendered pixels
+      // are the check that the title is actually on screen.
+      try requireText(["One quick update", "Open Screen Recording Settings", "Remind me later", "Remove the old Annotator"], in: windowURL)
       try requireText(["One quick update", "Remind me later"], in: directory.appendingPathComponent("initial-light.png"))
       try requireText(["One quick update", "Remind me later"], in: directory.appendingPathComponent("initial-dark.png"))
       try requireText(["Open Settings again", "Waiting for permission"], in: directory.appendingPathComponent("waiting.png"))
@@ -354,57 +348,6 @@ enum ScreenRecordingHelper {
     rep.size = bounds.size
     view.cacheDisplay(in: bounds, to: rep)
     return rep
-  }
-
-  /// SwiftUI draws `Text` in its own layer. Those words are not `NSTextField`
-  /// subviews, so a subview walk cannot see a title that is on screen.
-  /// VoiceOver reads the accessibility tree, and the PNG is what was painted.
-  private static func interfaceStrings(in window: NSWindow) -> [String] {
-    var values: [String] = []
-    var seen = Set<ObjectIdentifier>()
-    func visit(_ object: AnyObject) {
-      guard seen.insert(ObjectIdentifier(object)).inserted else { return }
-      if let view = object as? NSView {
-        if let text = view as? NSTextField, !text.stringValue.isEmpty {
-          values.append(text.stringValue)
-        }
-        if let button = view as? NSButton, !button.title.isEmpty {
-          values.append(button.title)
-        }
-        for subview in view.subviews {
-          visit(subview)
-        }
-      }
-    }
-    if let content = window.contentView {
-      visit(content)
-    }
-    // NSObject and NSAccessibilityElementProtocol do not expose
-    // accessibilityLabel in this SDK. The process accessibility element does.
-    values.append(contentsOf: axStrings(AXUIElementCreateApplication(getpid()), depth: 0))
-    return values
-  }
-
-  private static func axStrings(_ element: AXUIElement, depth: Int) -> [String] {
-    if depth > 12 { return [] }
-    var values: [String] = []
-    for attribute in [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute] {
-      var copy: CFTypeRef?
-      if AXUIElementCopyAttributeValue(element, attribute as CFString, &copy) == .success,
-         let text = copy as? String,
-         !text.isEmpty {
-        values.append(text)
-      }
-    }
-    var children: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success else {
-      return values
-    }
-    let list = children as? [AXUIElement] ?? []
-    for child in list {
-      values.append(contentsOf: axStrings(child, depth: depth + 1))
-    }
-    return values
   }
 
   private static func recognizedText(in url: URL) throws -> String {
