@@ -16,6 +16,9 @@ final class AnnotatorWindow: NSWindow {
 @main
 enum AnnotatorMain {
   static func main() {
+    if CommandLine.arguments.contains("--protocol-self-test") {
+      exit(AgentBridge.runProtocolSelfTest())
+    }
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
@@ -400,13 +403,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   private func becomeAgentOrExit(presentSettings: Bool) {
-    if AgentBridge.send(.settings) != nil {
-      exit(0)
+    if let reply = AgentBridge.send(.settings) {
+      if !reply.ok, let error = reply.error, !error.isEmpty {
+        fputs("Annotator: \(error)\n", stderr)
+      }
+      exit(reply.code)
     }
     if !AgentBridge.acquireLock() {
       for _ in 0..<20 {
-        if AgentBridge.send(.settings) != nil {
-          exit(0)
+        if let reply = AgentBridge.send(.settings) {
+          if !reply.ok, let error = reply.error, !error.isEmpty {
+            fputs("Annotator: \(error)\n", stderr)
+          }
+          exit(reply.code)
         }
         Thread.sleep(forTimeInterval: 0.05)
       }
@@ -443,7 +452,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     MenuBarController.shared.onQuit = {
       NSApp.terminate(nil)
     }
-    MenuBarController.shared.install()
+    // Create the status item after this launch callback returns. Creating it
+    // inside applicationDidFinishLaunching can leave the button with no window.
+    DispatchQueue.main.async {
+      MenuBarController.shared.install()
+    }
     HotkeyCenter.shared.onFire = { action in
       DispatchQueue.main.async {
         MainActor.assumeIsolated {

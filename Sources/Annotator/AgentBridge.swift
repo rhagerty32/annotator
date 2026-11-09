@@ -22,7 +22,7 @@ enum AgentBridge {
   private static let server = Server()
 
   static var socketURL: URL {
-    AnnotatorFiles.supportDirectory.appendingPathComponent("agent.sock")
+    socketURLOverride ?? AnnotatorFiles.supportDirectory.appendingPathComponent("agent.sock")
   }
 
   @discardableResult
@@ -42,6 +42,56 @@ enum AgentBridge {
   static func send(_ request: LaunchRequest) -> AgentReply? {
     server.send(request)
   }
+
+  /// In-process encode, listen, and decode check. Used by `--protocol-self-test`.
+  static func runProtocolSelfTest() -> Int32 {
+    if LaunchRequest.parse(["AnnotatorBin", "--settings"]) != .settings {
+      fputs("protocol self-test: --settings did not parse\n", stderr)
+      return 1
+    }
+    if case .capture = LaunchRequest.parse(["AnnotatorBin", "--capture"]) {
+    } else {
+      fputs("protocol self-test: --capture did not parse\n", stderr)
+      return 1
+    }
+    if LaunchRequest.parse(["Annotator", "-psn_0_1"]) != .agent {
+      fputs("protocol self-test: Finder -psn_ did not parse as agent\n", stderr)
+      return 1
+    }
+
+    // sun_path holds 104 bytes. A long NSTemporaryDirectory path would fail to bind.
+    let socketPath = "/tmp/annotator-proto-\(getpid()).sock"
+    socketURLOverride = URL(fileURLWithPath: socketPath)
+    defer {
+      stop()
+      socketURLOverride = nil
+      try? FileManager.default.removeItem(atPath: socketPath)
+    }
+
+    let box = SelfTestBox()
+    guard start(handler: { request in
+      box.store(request)
+      return .success(text: "ok")
+    }) else {
+      fputs("protocol self-test: could not listen\n", stderr)
+      return 1
+    }
+
+    DispatchQueue.global(qos: .userInitiated).async {
+      box.storeReply(send(.settings))
+    }
+    let deadline = Date().addingTimeInterval(5)
+    while box.reply() == nil && Date() < deadline {
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    }
+    guard let reply = box.reply(), reply.ok, box.request() == .settings else {
+      fputs("protocol self-test: settings round trip failed (\(String(describing: box.reply())))\n", stderr)
+      return 1
+    }
+    return 0
+  }
+
+  fileprivate static var socketURLOverride: URL?
 }
 
 private final class Server {
@@ -148,6 +198,11 @@ private final class Server {
       }
       var nosigpipe: Int32 = 1
       setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size))
+      // The listening socket is nonblocking, and macOS copies that onto the
+      // accepted socket. A nonblocking read runs before the client writes the
+      // JSON and comes back empty, which we used to report as
+      // "Unrecognized request."
+      makeBlocking(client)
       setTimeout(client, seconds: 5)
       handle(client)
     }
@@ -288,6 +343,13 @@ private func mutateAddress(path: String, _ body: (UnsafePointer<sockaddr>, sockl
   }
 }
 
+private func makeBlocking(_ fd: Int32) {
+  let flags = fcntl(fd, F_GETFL)
+  if flags >= 0 {
+    _ = fcntl(fd, F_SETFL, flags & ~O_NONBLOCK)
+  }
+}
+
 private func setTimeout(_ fd: Int32, seconds: Int) {
   var timeout = timeval(tv_sec: seconds, tv_usec: 0)
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
@@ -308,6 +370,36 @@ private func writeAll(_ fd: Int32, _ data: Data) -> Bool {
       return false
     }
     return true
+  }
+}
+
+private final class SelfTestBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var seen: LaunchRequest?
+  private var result: AgentReply?
+
+  func store(_ request: LaunchRequest) {
+    lock.lock()
+    seen = request
+    lock.unlock()
+  }
+
+  func storeReply(_ reply: AgentReply?) {
+    lock.lock()
+    result = reply
+    lock.unlock()
+  }
+
+  func request() -> LaunchRequest? {
+    lock.lock()
+    defer { lock.unlock() }
+    return seen
+  }
+
+  func reply() -> AgentReply? {
+    lock.lock()
+    defer { lock.unlock() }
+    return result
   }
 }
 
