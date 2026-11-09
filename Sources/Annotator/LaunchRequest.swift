@@ -23,6 +23,9 @@ enum LaunchRequest: Equatable {
     if rest.isEmpty || Array(rest) == ["--agent"] {
       return .agent
     }
+    if rest.contains("--settings") {
+      return .settings
+    }
     if rest.contains("--ocr") {
       return .ocr
     }

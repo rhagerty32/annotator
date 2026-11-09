@@ -40,13 +40,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   private var agentMode = false
   private var captureBusy = false
   private var endingEditor = false
+  /// Reopen events that arrive as part of this process's own launch are ignored.
+  /// A later Finder or `open -a` targets the already-running agent.
+  private var acceptReopen = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     installMainMenu()
+    installReopenHandler()
     let request = LaunchRequest.parse(CommandLine.arguments)
     switch request {
     case .agent:
-      becomeAgentOrExit()
+      // Finder, Spotlight, and `open -a` pass no capture flags. Login items
+      // use the same path, so they start the agent without opening Settings.
+      becomeAgentOrExit(presentSettings: !Self.launchedAsLoginItem())
     default:
       if let reply = AgentBridge.send(request) {
         deliverToTerminal(reply, ocr: request.isOCR)
@@ -56,6 +62,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self?.runOneShot(request)
       }
     }
+    DispatchQueue.main.async { [weak self] in
+      self?.acceptReopen = true
+    }
+  }
+
+  /// Finder double-click, Spotlight, and `open -a` while this process is already
+  /// running arrive here (or as kAEReopenApplication), not as a new process.
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    guard acceptReopen else { return true }
+    presentSettingsFromOpen()
+    return true
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -382,7 +399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     return event.charactersIgnoringModifiers == "/" && flags.contains(.shift)
   }
 
-  private func becomeAgentOrExit() {
+  private func becomeAgentOrExit(presentSettings: Bool) {
     if AgentBridge.send(.settings) != nil {
       exit(0)
     }
@@ -403,10 +420,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     if !listening {
       fputs("Annotator: shortcut handoff is unavailable.\n", stderr)
     }
-    startAgent()
+    startAgent(presentSettings: presentSettings)
   }
 
-  private func startAgent() {
+  private func startAgent(presentSettings: Bool) {
     agentMode = true
     MenuBarController.shared.onCapture = { action in
       DispatchQueue.main.async {
@@ -438,7 +455,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     HotkeyCenter.shared.start()
     UpdateController.shared.startAutomaticChecks()
     OCRService.warm()
-    if !AgentPreferences.didPresentSettings {
+    if presentSettings || !AgentPreferences.didPresentSettings {
       AgentPreferences.didPresentSettings = true
       SettingsWindow.show()
     }
@@ -449,8 +466,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     switch request {
     case .ocr:
       deliverToTerminal(performOCR(), ocr: true)
-    case .agent, .activate, .settings, .updates:
-      startAgent()
+    case .settings:
+      startAgent(presentSettings: true)
+    case .agent, .activate, .updates:
+      startAgent(presentSettings: false)
     default:
       let reply = openEditor(for: request)
       if panel == nil {
@@ -603,6 +622,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       fputs("Annotator: \(error)\n", stderr)
     }
     exit(reply.code)
+  }
+
+  /// `kAEReopenApplication` ('rapp'). LSUIElement apps sometimes get this
+  /// Apple event without `applicationShouldHandleReopen`.
+  private func installReopenHandler() {
+    NSAppleEventManager.shared().setEventHandler(
+      self,
+      andSelector: #selector(handleReopenEvent(_:withReplyEvent:)),
+      forEventClass: AEEventClass(0x61657674),
+      andEventID: AEEventID(0x72617070)
+    )
+  }
+
+  @objc private func handleReopenEvent(
+    _ event: NSAppleEventDescriptor,
+    withReplyEvent reply: NSAppleEventDescriptor
+  ) {
+    guard acceptReopen else { return }
+    presentSettingsFromOpen()
+  }
+
+  private func presentSettingsFromOpen() {
+    if agentMode || panel == nil {
+      SettingsWindow.show()
+    } else {
+      focusEditor()
+    }
+  }
+
+  /// Login items send `keyAELaunchedAsLogInItem` ('lgit') on the open event.
+  private static func launchedAsLoginItem() -> Bool {
+    guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
+    return event.paramDescriptor(forKeyword: AEKeyword(0x6C676974))?.booleanValue == true
   }
 
   private func installMainMenu() {
