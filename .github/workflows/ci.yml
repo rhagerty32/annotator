@@ -78,4 +78,6 @@ jobs:
         run: npm --prefix raycast ci
 
       - name: Type-check Raycast extension
-        run: npm --prefix raycast exec -- tsc --noEmit
+        working-directory: raycast
+        # npm exec swallows --noEmit and tsc prints its help instead of checking.
+        run: ./node_modules/.bin/tsc --noEmit
