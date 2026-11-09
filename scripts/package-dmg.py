@@ -105,6 +105,7 @@ def stage_app(stage: Path, binary: Path) -> Path:
     shutil.copyfile(binary, macos / "Annotator")
     os.chmod(macos / "Annotator", 0o755)
     # Same image under the old name so `AnnotatorBin --settings` still runs it.
+    # That process opens this app and exits. It must not stay up as the agent.
     shutil.copyfile(binary, macos / "AnnotatorBin")
     os.chmod(macos / "AnnotatorBin", 0o755)
     background = stage / ".background"

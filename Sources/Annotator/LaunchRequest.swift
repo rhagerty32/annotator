@@ -30,6 +30,12 @@ enum LaunchRequest: Equatable {
     if rest.contains("--settings") {
       return .settings
     }
+    if rest.contains("--updates") {
+      return .updates
+    }
+    if rest.contains("--activate") {
+      return .activate
+    }
     if rest.contains("--ocr") {
       return .ocr
     }
@@ -62,6 +68,42 @@ enum LaunchRequest: Equatable {
   private static func delay(in args: [String]) -> Int {
     guard let index = args.firstIndex(of: "--delay"), index + 1 < args.count else { return 0 }
     return Int(args[index + 1]) ?? 0
+  }
+
+  /// Arguments passed to a newly opened `Annotator.app`, after the executable path.
+  var forwardingArguments: [String] {
+    switch self {
+    case .agent:
+      return ["--agent"]
+    case .activate:
+      return ["--activate"]
+    case .settings:
+      return ["--settings"]
+    case .updates:
+      return ["--updates"]
+    case .capture(let options):
+      var args = ["--capture"]
+      if options.window { args.append("--window") }
+      if options.fullScreen { args.append("--fullscreen") }
+      if options.repeatLast { args.append("--repeat") }
+      if options.delay > 0 {
+        args.append("--delay")
+        args.append(String(options.delay))
+      }
+      return args
+    case .clipboard:
+      return ["--clipboard"]
+    case .reopen:
+      return ["--reopen"]
+    case .ocr:
+      return ["--ocr"]
+    case .image(let path, let wait):
+      var args = ["--image", path]
+      if wait { args.append("--wait") }
+      return args
+    case .file(let path):
+      return [path]
+    }
   }
 }
 

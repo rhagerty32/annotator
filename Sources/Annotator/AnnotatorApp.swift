@@ -61,6 +61,15 @@ enum AnnotatorMain {
 
   @MainActor
   private static func exercisePackagedUI() -> Int32 {
+    // MenuBarAgent on the CI runner does not reject a foreign image, so a
+    // passing AnnotatorBin status item is not evidence. The agent process
+    // must be the bundle's CFBundleExecutable.
+    let running = BundleExecutable.currentPath
+    let expected = BundleExecutable.bundleExecutablePath
+    if !BundleExecutable.isBundleExecutable || running != expected {
+      fputs("ui self-test: agent executable \(running) != bundle executable \(expected)\n", stderr)
+      return 1
+    }
     // Same order as the agent: status item first, then Settings. An exception
     // from setCollectionBehavior fails this test instead of skipping the icon.
     MenuBarController.shared.install()
@@ -86,6 +95,23 @@ enum AnnotatorMain {
 
 private final class UITestBox: @unchecked Sendable {
   var code: Int32 = 1
+}
+
+private final class OpenResultBox: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stored: Error?
+
+  func store(_ error: Error?) {
+    lock.lock()
+    stored = error
+    lock.unlock()
+  }
+
+  var error: Error? {
+    lock.lock()
+    defer { lock.unlock() }
+    return stored
+  }
 }
 
 private final class OCRResultBox: @unchecked Sendable {
@@ -463,6 +489,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   private func becomeAgentOrExit(presentSettings: Bool) {
+    if !BundleExecutable.isBundleExecutable {
+      // Opening the app with no capture flags brings Settings forward,
+      // except for a login item, which only starts the agent.
+      handOffToBundleExecutable(presentSettings ? .settings : .agent)
+    }
     if let reply = AgentBridge.send(.settings) {
       if !reply.ok, let error = reply.error, !error.isEmpty {
         fputs("Annotator: \(error)\n", stderr)
@@ -493,6 +524,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
   }
 
   private func startAgent(presentSettings: Bool) {
+    if !BundleExecutable.isBundleExecutable {
+      let running = BundleExecutable.currentPath
+      let expected = BundleExecutable.bundleExecutablePath
+      fputs("Annotator: refusing to run the menu bar agent as \(running) (bundle executable is \(expected))\n", stderr)
+      exit(1)
+    }
     agentMode = true
     MenuBarController.shared.onCapture = { action in
       DispatchQueue.main.async {
@@ -538,8 +575,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     case .ocr:
       deliverToTerminal(performOCR(), ocr: true)
     case .settings:
+      if !BundleExecutable.isBundleExecutable {
+        handOffToBundleExecutable(.settings)
+      }
       startAgent(presentSettings: true)
     case .agent, .activate, .updates:
+      if !BundleExecutable.isBundleExecutable {
+        handOffToBundleExecutable(request)
+      }
       startAgent(presentSettings: false)
     default:
       let reply = openEditor(for: request)
@@ -686,6 +729,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 1.05))
     hud.dismiss()
     return AgentReply(ok: false, code: 2, text: "", error: "No text found")
+  }
+
+  /// This process is not `CFBundleExecutable`. Start that binary, deliver the
+  /// request over the agent socket, and exit. A second hop is refused so a
+  /// wrong image cannot relaunch itself forever.
+  private func handOffToBundleExecutable(_ request: LaunchRequest) -> Never {
+    if ProcessInfo.processInfo.environment["ANNOTATOR_HANDOFF"] == "1" {
+      let running = BundleExecutable.currentPath
+      let expected = BundleExecutable.bundleExecutablePath
+      fputs("Annotator: refusing to relaunch again from \(running) (bundle executable is \(expected))\n", stderr)
+      exit(1)
+    }
+    if let reply = AgentBridge.send(request) {
+      deliverToTerminal(reply, ocr: request.isOCR)
+    }
+    guard let appURL = bundleApplicationURL() else {
+      fputs("Annotator: install Annotator.app to run the menu bar agent.\n", stderr)
+      exit(1)
+    }
+    guard openBundleApplication(at: appURL, arguments: request.forwardingArguments) else {
+      exit(1)
+    }
+    let deadline = Date().addingTimeInterval(15)
+    while Date() < deadline {
+      if let reply = AgentBridge.send(request) {
+        deliverToTerminal(reply, ocr: request.isOCR)
+      }
+      Thread.sleep(forTimeInterval: 0.05)
+    }
+    fputs("Annotator: the menu bar app did not start.\n", stderr)
+    exit(1)
+  }
+
+  private func bundleApplicationURL() -> URL? {
+    if let bundled = BundleExecutable.applicationURL {
+      return bundled
+    }
+    return NSWorkspace.shared.urlForApplication(withBundleIdentifier: "local.annotator")
+  }
+
+  private func openBundleApplication(at url: URL, arguments: [String]) -> Bool {
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.arguments = arguments
+    configuration.activates = true
+    // AnnotatorBin is inside the bundle, so Launch Services already counts this
+    // process as the running app. A new instance is what execs CFBundleExecutable.
+    configuration.createsNewApplicationInstance = true
+    var environment = ProcessInfo.processInfo.environment
+    environment["ANNOTATOR_HANDOFF"] = "1"
+    configuration.environment = environment
+    let box = OpenResultBox()
+    let group = DispatchGroup()
+    group.enter()
+    NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, error in
+      box.store(error)
+      group.leave()
+    }
+    let deadline = Date().addingTimeInterval(10)
+    while group.wait(timeout: .now()) == .timedOut {
+      if Date() >= deadline {
+        fputs("Annotator: timed out opening \(url.path)\n", stderr)
+        return false
+      }
+      RunLoop.current.run(mode: .common, before: Date(timeIntervalSinceNow: 0.05))
+    }
+    if let error = box.error {
+      fputs("Annotator: could not open \(url.path): \(error.localizedDescription)\n", stderr)
+      return false
+    }
+    return true
   }
 
   private func deliverToTerminal(_ reply: AgentReply, ocr: Bool) -> Never {

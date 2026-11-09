@@ -146,7 +146,19 @@ jobs:
           dist/Annotator.app/Contents/MacOS/Annotator --protocol-self-test
           dist/Annotator.app/Contents/MacOS/AnnotatorBin --protocol-self-test
           dist/Annotator.app/Contents/MacOS/Annotator --ui-self-test
-          dist/Annotator.app/Contents/MacOS/AnnotatorBin --ui-self-test
+          # The runner does not reproduce MenuBarAgent's rejection of a foreign
+          # image. AnnotatorBin must fail the executable-path assertion instead
+          # of being accepted as the menu bar agent.
+          set +e
+          ui_bin="$(dist/Annotator.app/Contents/MacOS/AnnotatorBin --ui-self-test 2>&1)"
+          ui_status=$?
+          set -e
+          printf '%s\n' "${ui_bin}"
+          if [[ "${ui_status}" -eq 0 ]]; then
+            echo "::error::AnnotatorBin --ui-self-test passed; the agent must be CFBundleExecutable"
+            exit 1
+          fi
+          echo "${ui_bin}" | grep -q "bundle executable"
           python3 - <<'PY'
           import subprocess, sys
           log = subprocess.run(

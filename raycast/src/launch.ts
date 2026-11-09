@@ -14,8 +14,18 @@ interface Preferences {
   annotatorPath?: string;
 }
 
+/// Installed app first. A preference path or a SwiftPM binary must not become
+/// the long-running menu bar agent.
+function installedBundleExecutables(): string[] {
+  return [
+    "/Applications/Annotator.app/Contents/MacOS/Annotator",
+    join(homedir(), "Applications/Annotator.app/Contents/MacOS/Annotator"),
+  ];
+}
+
 export function resolveBinary(preference?: string): string | null {
   const candidates = [
+    ...installedBundleExecutables(),
     preference?.trim(),
     join(__dirname, "../.build/release/Annotator"),
     join(__dirname, "../../.build/release/Annotator"),
@@ -61,7 +71,7 @@ export async function launchFastCapture(flags: FastCapture = {}): Promise<void> 
     await showToast({
       style: Toast.Style.Failure,
       title: "Annotator binary not found",
-      message: "Build with `npm run build:annotator` and set the preference path.",
+      message: "Install Annotator in /Applications, or set the Annotator binary preference.",
     });
     return;
   }
@@ -117,7 +127,7 @@ export async function runAnnotator(
     await showToast({
       style: Toast.Style.Failure,
       title: "Annotator binary not found",
-      message: "Build with `npm run build:annotator` and set the preference path.",
+      message: "Install Annotator in /Applications, or set the Annotator binary preference.",
     });
     return null;
   }

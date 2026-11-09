@@ -58,6 +58,41 @@ enum AgentBridge {
       fputs("protocol self-test: Finder -psn_ did not parse as agent\n", stderr)
       return 1
     }
+    let roundTrips: [LaunchRequest] = [
+      .agent,
+      .settings,
+      .updates,
+      .activate,
+      .ocr,
+      .clipboard,
+      .reopen,
+      .capture(CaptureOptions(window: true, fullScreen: false, repeatLast: true, delay: 3)),
+      .image(path: "/tmp/shot.png", wait: true),
+      .file(path: "/tmp/shot.png"),
+    ]
+    for sample in roundTrips {
+      let parsed = LaunchRequest.parse(["Annotator"] + sample.forwardingArguments)
+      if parsed != sample {
+        fputs("protocol self-test: \(String(describing: sample)) did not round trip\n", stderr)
+        return 1
+      }
+    }
+    if Bundle.main.bundleURL.pathExtension == "app" {
+      let name = BundleExecutable.currentURL.lastPathComponent
+      if name == "AnnotatorBin" && BundleExecutable.isBundleExecutable {
+        fputs("protocol self-test: AnnotatorBin was treated as CFBundleExecutable\n", stderr)
+        return 1
+      }
+      if name == "Annotator" && !BundleExecutable.isBundleExecutable {
+        let running = BundleExecutable.currentPath
+        let expected = BundleExecutable.bundleExecutablePath
+        fputs("protocol self-test: bundle executable was not recognized (\(running) vs \(expected))\n", stderr)
+        return 1
+      }
+    } else if BundleExecutable.isBundleExecutable {
+      fputs("protocol self-test: a non-bundle path was treated as the agent executable\n", stderr)
+      return 1
+    }
 
     // sun_path holds 104 bytes. A long NSTemporaryDirectory path would fail to bind.
     let socketPath = "/tmp/annotator-proto-\(getpid()).sock"
