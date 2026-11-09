@@ -11,6 +11,11 @@ log() { printf '→ %s\n' "$*"; }
 log "Building Annotator"
 swift build -c release
 
+if pgrep -x Annotator >/dev/null 2>&1 || pgrep -x AnnotatorBin >/dev/null 2>&1; then
+  log "Quitting Annotator so the menu bar app loads this build"
+  killall Annotator AnnotatorBin >/dev/null 2>&1 || true
+fi
+
 if [[ ! -d raycast/node_modules ]]; then
   log "Installing Raycast extension deps"
   npm --prefix raycast install

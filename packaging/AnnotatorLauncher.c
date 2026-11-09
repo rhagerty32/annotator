@@ -1,9 +1,9 @@
 /*
  * Finder launcher for Annotator.app.
  *
- * Double-click and the Finder -psn_ argument both exec AnnotatorBin with
- * --capture. Any other argument is forwarded and --capture is left off, so
- * the Raycast commands and the CLI keep working.
+ * A double-click (and the Finder -psn_ argument) execs AnnotatorBin with no
+ * extra flags so the menu bar agent stays resident. Any other argument is
+ * forwarded unchanged, which keeps Raycast commands and the CLI working.
  */
 #include <libgen.h>
 #include <mach-o/dyld.h>
@@ -29,32 +29,17 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  int add_capture = 1;
-  if (argc >= 2) {
-    int other = 0;
-    for (int i = 1; i < argc; i++) {
-      if (strncmp(argv[i], "-psn_", 5) != 0) {
-        other++;
-      }
-    }
-    add_capture = (other == 0);
-  }
-
-  char **args = calloc((size_t)argc + 3, sizeof(char *));
+  char **args = calloc((size_t)argc + 1, sizeof(char *));
   if (args == NULL) {
     return 1;
   }
   args[0] = bin;
   int out = 1;
-  if (add_capture) {
-    args[1] = "--capture";
-    out = 2;
-  } else {
-    for (int i = 1; i < argc; i++) {
-      if (strncmp(argv[i], "-psn_", 5) != 0) {
-        args[out++] = argv[i];
-      }
+  for (int i = 1; i < argc; i++) {
+    if (strncmp(argv[i], "-psn_", 5) == 0) {
+      continue;
     }
+    args[out++] = argv[i];
   }
   args[out] = NULL;
 

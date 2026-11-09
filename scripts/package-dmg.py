@@ -12,7 +12,10 @@ The background is assets/dmg/background.tiff (1x at 72 dpi, 2x at 144 dpi).
 Labels sit under the icons, about y 290 to 330, which the background leaves empty.
 On a dark window, Finder draws those labels white in Dark Mode.
 
-On macOS this uses swift, hdiutil, and codesign.
+On macOS this uses swift, hdiutil, and codesign. It embeds Sparkle.framework
+so Check for Updates can relaunch a newer build. Signing is ad-hoc unless
+DEVELOPER_ID_APPLICATION is set. Notarization runs when APPLE_NOTARY_KEY_ID,
+APPLE_NOTARY_ISSUER_ID, and APPLE_NOTARY_KEY_PATH are set.
 On Linux it reuses the arm64 binaries already inside dist/Annotator.dmg and
 packs an HFS+ image with libdmg-hfsplus (hfsplus, dmg, and scripts/hfs-tool.c).
 """
@@ -96,7 +99,7 @@ def stage_app(stage: Path, launcher: Path, binary: Path) -> Path:
     resources = app / "Contents" / "Resources"
     macos.mkdir(parents=True)
     resources.mkdir(parents=True)
-    shutil.copyfile(INFO, app / "Contents" / "Info.plist")
+    write_info(app / "Contents" / "Info.plist")
     shutil.copyfile(ICNS, resources / "AppIcon.icns")
     shutil.copyfile(launcher, macos / "Annotator")
     shutil.copyfile(binary, macos / "AnnotatorBin")
@@ -112,10 +115,205 @@ def stage_app(stage: Path, launcher: Path, binary: Path) -> Path:
     return app
 
 
+def write_info(dest: Path) -> None:
+    info = plistlib.loads(INFO.read_bytes())
+    version = os.environ.get("ANNOTATOR_VERSION", "").strip()
+    if version:
+        info["CFBundleShortVersionString"] = version
+        info["CFBundleVersion"] = version
+    public = os.environ.get("SPARKLE_PUBLIC_ED_KEY", "").strip()
+    if public:
+        info["SUPublicEDKey"] = public
+    dest.write_bytes(plistlib.dumps(info, sort_keys=False))
+
+
+def find_sparkle_framework() -> Path | None:
+    root = ROOT / ".build"
+    if not root.exists():
+        return None
+    found = [
+        path
+        for path in root.rglob("Sparkle.framework")
+        if path.is_dir() and "Annotator.app" not in path.parts
+    ]
+
+    def rank(path: Path) -> tuple[int, int]:
+        parts = set(path.parts)
+        if "macos-arm64_x86_64" in parts:
+            return (0, len(path.parts))
+        if "macos-arm64" in parts:
+            return (1, len(path.parts))
+        if "macos-x86_64" in parts:
+            return (2, len(path.parts))
+        return (3, len(path.parts))
+
+    found.sort(key=rank)
+    return found[0] if found else None
+
+
+def embed_sparkle(app: Path) -> None:
+    framework = find_sparkle_framework()
+    if framework is None:
+        if sys.platform == "darwin":
+            raise SystemExit(
+                "Sparkle.framework was not found under .build. "
+                "swift build should fetch the Sparkle package before packaging."
+            )
+        print("Sparkle.framework not found; leaving this bundle without an updater", flush=True)
+        return
+    dest_root = app / "Contents" / "Frameworks"
+    dest_root.mkdir(parents=True, exist_ok=True)
+    dest = dest_root / "Sparkle.framework"
+    if dest.exists():
+        shutil.rmtree(dest)
+    if sys.platform == "darwin":
+        run(["ditto", str(framework), str(dest)])
+    else:
+        shutil.copytree(framework, dest, symlinks=True)
+
+
+def is_macho(path: Path) -> bool:
+    if not path.is_file() or path.is_symlink():
+        return False
+    try:
+        magic = path.read_bytes()[:4]
+    except OSError:
+        return False
+    return magic in (b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca")
+
+
+def signing_identity() -> str:
+    return os.environ.get("DEVELOPER_ID_APPLICATION", "").strip() or "-"
+
+
+def sign_item(path: Path, identity: str, preserve: bool = False, identifier: str | None = None) -> None:
+    cmd = ["codesign", "--force", "--sign", identity]
+    if identity != "-":
+        cmd += ["--timestamp", "--options", "runtime"]
+    if identifier:
+        cmd += ["--identifier", identifier]
+    if preserve:
+        preserved = subprocess.run(
+            cmd + ["--preserve-metadata=entitlements", str(path)],
+            text=True,
+            capture_output=True,
+        )
+        if preserved.returncode == 0:
+            return
+    run(cmd + [str(path)])
+
+
+def sign_sparkle(framework: Path, identity: str) -> None:
+    paths: list[Path] = []
+    for path in framework.rglob("*"):
+        if path.is_symlink():
+            continue
+        if path.suffix in {".app", ".xpc", ".bundle"} or is_macho(path):
+            paths.append(path)
+    paths.sort(key=lambda item: len(item.parts), reverse=True)
+    for path in paths:
+        sign_item(path, identity, preserve=True)
+    sign_item(framework, identity, preserve=True)
+
+
+def ensure_framework_rpath(binary: Path) -> None:
+    if sys.platform != "darwin" or not binary.is_file():
+        return
+    token = "@executable_path/../Frameworks"
+    listing = capture(["otool", "-l", str(binary)])
+    if token in listing:
+        return
+    added = subprocess.run(
+        ["install_name_tool", "-add_rpath", token, str(binary)],
+        text=True,
+        capture_output=True,
+    )
+    if added.returncode != 0:
+        subprocess.run(["codesign", "--remove-signature", str(binary)], check=False)
+        run(["install_name_tool", "-add_rpath", token, str(binary)])
+
+
+def assert_links_sparkle(binary: Path) -> None:
+    if sys.platform != "darwin" or not binary.is_file():
+        return
+    listing = capture(["otool", "-L", str(binary)])
+    if "Sparkle.framework" not in listing:
+        raise SystemExit("AnnotatorBin does not link Sparkle.framework")
+
+
+def notarization_env() -> tuple[str, str, str] | None:
+    key_id = os.environ.get("APPLE_NOTARY_KEY_ID", "").strip()
+    issuer = os.environ.get("APPLE_NOTARY_ISSUER_ID", "").strip()
+    key_path = os.environ.get("APPLE_NOTARY_KEY_PATH", "").strip()
+    if key_id and issuer and key_path:
+        return key_id, issuer, key_path
+    return None
+
+
+def notarize(path: Path) -> None:
+    creds = notarization_env()
+    if creds is None or sys.platform != "darwin":
+        return
+    key_id, issuer, key_path = creds
+    submit = path
+    temp_zip: Path | None = None
+    if path.suffix == ".app":
+        temp_zip = path.parent / f"{path.stem}-notarize.zip"
+        if temp_zip.exists():
+            temp_zip.unlink()
+        run(["ditto", "-c", "-k", "--keepParent", str(path), str(temp_zip)])
+        submit = temp_zip
+    try:
+        run(
+            [
+                "xcrun",
+                "notarytool",
+                "submit",
+                str(submit),
+                "--key",
+                key_path,
+                "--key-id",
+                key_id,
+                "--issuer",
+                issuer,
+                "--wait",
+            ]
+        )
+        run(["xcrun", "stapler", "staple", str(path)])
+    finally:
+        if temp_zip is not None and temp_zip.exists():
+            temp_zip.unlink()
+
+
+def publish_app(app: Path) -> None:
+    dest = DIST.parent / "Annotator.app"
+    if dest.exists():
+        shutil.rmtree(dest)
+    if sys.platform == "darwin":
+        run(["ditto", str(app), str(dest)])
+    else:
+        shutil.copytree(app, dest, symlinks=True)
+
+
 def sign_app(app: Path) -> None:
     if sys.platform == "darwin":
-        run(["codesign", "--force", "--sign", "-", "--identifier", "local.annotator", str(app / "Contents" / "MacOS" / "AnnotatorBin")])
-        run(["codesign", "--force", "--sign", "-", "--identifier", "local.annotator", str(app)])
+        identity = signing_identity()
+        framework = app / "Contents" / "Frameworks" / "Sparkle.framework"
+        if framework.exists():
+            sign_sparkle(framework, identity)
+        sign_item(app / "Contents" / "MacOS" / "AnnotatorBin", identity, identifier="local.annotator")
+        sign_item(app / "Contents" / "MacOS" / "Annotator", identity, identifier="local.annotator.launcher")
+        sign_item(app, identity, identifier="local.annotator")
+        if identity == "-":
+            print(
+                "Ad-hoc signature. Sparkle updates need a Developer ID signed and notarized release.",
+                flush=True,
+            )
+        elif notarization_env() is None:
+            print(
+                "Developer ID signature without notarization. Gatekeeper will reject the download until it is notarized.",
+                flush=True,
+            )
         return
     rcodesign = os.environ.get("RCODESIGN") or shutil.which("rcodesign")
     if not rcodesign:
@@ -385,7 +583,14 @@ def main() -> None:
         stage = work / "stage"
         stage.mkdir()
         app = stage_app(stage, launcher, binary)
+        embed_sparkle(app)
+        binary_in_app = app / "Contents" / "MacOS" / "AnnotatorBin"
+        ensure_framework_rpath(binary_in_app)
+        assert_links_sparkle(binary_in_app)
         sign_app(app)
+        if sys.platform == "darwin" and signing_identity() != "-" and notarization_env() is not None:
+            notarize(app)
+        publish_app(app)
         output = work / "Annotator.dmg"
         if sys.platform == "darwin":
             build_macos(stage, output)
@@ -393,6 +598,10 @@ def main() -> None:
             build_linux(stage, output, work)
         DIST.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(output, DIST)
+        if sys.platform == "darwin" and signing_identity() != "-":
+            run(["codesign", "--force", "--sign", signing_identity(), "--timestamp", str(DIST)])
+            if notarization_env() is not None:
+                notarize(DIST)
     verify_dmg(DIST)
     print(f"Wrote {DIST}")
 
