@@ -16,6 +16,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Pillow
+        run: |
+          # package-dmg.py runs generate-icons.py with this python3. The runner
+          # image's Homebrew Python does not ship Pillow, and that interpreter
+          # is externally managed, so install into a venv and put it first on PATH.
+          python3 -m venv "${RUNNER_TEMP}/icon-python"
+          "${RUNNER_TEMP}/icon-python/bin/pip" install --disable-pip-version-check 'Pillow==13.0.0'
+          echo "${RUNNER_TEMP}/icon-python/bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/icon-python/bin/python" -c 'import PIL, sys; print(sys.executable); print("Pillow", PIL.__version__)'
+
+      - name: Generate icons
+        run: python3 scripts/generate-icons.py
+
       - name: Select Xcode 26
         run: |
           # macos-15 boots on Xcode 16.4. ToolbarSpacer is in the macOS 26 SDK,

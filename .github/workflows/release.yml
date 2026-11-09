@@ -54,6 +54,16 @@ jobs:
           xcodebuild -version
           swift --version
 
+      - name: Install Pillow
+        run: |
+          # publish-release.sh calls python3 for package-dmg.py, which runs
+          # generate-icons.py. Homebrew Python on this image has no Pillow and
+          # is externally managed, so install into a venv and put it first on PATH.
+          python3 -m venv "${RUNNER_TEMP}/icon-python"
+          "${RUNNER_TEMP}/icon-python/bin/pip" install --disable-pip-version-check 'Pillow==13.0.0'
+          echo "${RUNNER_TEMP}/icon-python/bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/icon-python/bin/python" -c 'import PIL, sys; print(sys.executable); print("Pillow", PIL.__version__)'
+
       - name: Build, sign the update zip, and write the appcast
         id: build
         env:
