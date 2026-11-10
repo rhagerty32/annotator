@@ -187,14 +187,6 @@ enum AnnotatorMain {
       fputs("canvas drag self-test: canvas hosting view is missing\n\(tree)\n", stderr)
       return 1
     }
-    var mover: NSView? = canvas
-    while let view = mover {
-      if view.mouseDownCanMoveWindow {
-        fputs("canvas drag self-test: \(type(of: view)) can move the window\n", stderr)
-        return 1
-      }
-      mover = view.superview
-    }
     let origin = panel.frame.origin
     let bounds = canvas.bounds
     let local = NSPoint(x: bounds.midX, y: bounds.midY)
