@@ -315,7 +315,7 @@ enum AnnotatorMain {
   }
 
   private static func sendMouse(_ type: NSEvent.EventType, at point: NSPoint, on window: NSWindow) {
-    guard window.isKeyWindow else {
+    if !window.isKeyWindow {
       window.makeKeyAndOrderFront(nil)
       NSApp.activate(ignoringOtherApps: true)
     }
