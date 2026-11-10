@@ -19,6 +19,8 @@ struct AnnotationCanvasView: View {
 
       ZStack(alignment: .topLeading) {
         CanvasStageBackground(stage: state.stage, canvasSize: geo.size)
+        CanvasHitAnchor()
+          .frame(width: geo.size.width, height: geo.size.height)
 
         Canvas { context, _ in
           if let cgImage = state.cgImage {
@@ -369,6 +371,26 @@ struct AnnotationCanvasView: View {
       y: point.y / imageSize.height * viewSize.height
     )
   }
+}
+
+/// Marks the canvas in the AppKit tree without taking hits, and refuses to
+/// drag the window if a mouse-down lands here.
+final class CanvasPassthroughView: NSView {
+  static let identifier = "annotator.canvas"
+
+  override var mouseDownCanMoveWindow: Bool { false }
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+private struct CanvasHitAnchor: NSViewRepresentable {
+  func makeNSView(context: Context) -> NSView {
+    let view = CanvasPassthroughView()
+    view.identifier = NSUserInterfaceItemIdentifier(CanvasPassthroughView.identifier)
+    return view
+  }
+
+  func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 /// Stage fill, optional checkerboard.

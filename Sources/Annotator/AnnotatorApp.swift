@@ -21,10 +21,18 @@ final class EditorHostingView: NSHostingView<RootView> {
 }
 
 final class EditorHostingController: NSHostingController<RootView> {
-  override func loadView() {
+  override init(rootView: RootView) {
+    super.init(rootView: rootView)
+    // loadView() is not a reliable place to swap this controller's view.
+    // Assign the subclass after init so the canvas is the view AppKit hit-tests.
     let host = EditorHostingView(rootView: rootView)
     host.sizingOptions = []
     view = host
+  }
+
+  @available(*, unavailable)
+  required init?(coder: NSCoder) {
+    fatalError("init(coder:) has not been implemented")
   }
 }
 
@@ -168,27 +176,29 @@ enum AnnotatorMain {
     panel.orderFrontRegardless()
     panel.makeKey()
     NSApp.activate(ignoringOtherApps: true)
-    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.4))
 
+    let canvas = waitForCanvas(in: panel)
     if panel.isMovableByWindowBackground {
       fputs("canvas drag self-test: window is movable by its background\n", stderr)
       return 1
     }
-    guard let host = editorHostingView(in: panel.contentView) else {
-      fputs("canvas drag self-test: canvas hosting view is missing\n", stderr)
+    guard let canvas else {
+      let tree = viewTree(panel.contentView)
+      fputs("canvas drag self-test: canvas hosting view is missing\n\(tree)\n", stderr)
       return 1
     }
-    if host.mouseDownCanMoveWindow {
-      fputs("canvas drag self-test: canvas hosting view can move the window\n", stderr)
-      return 1
-    }
-    guard let content = panel.contentView else {
-      fputs("canvas drag self-test: editor has no content view\n", stderr)
-      return 1
+    var mover: NSView? = canvas
+    while let view = mover {
+      if view.mouseDownCanMoveWindow {
+        fputs("canvas drag self-test: \(type(of: view)) can move the window\n", stderr)
+        return 1
+      }
+      mover = view.superview
     }
     let origin = panel.frame.origin
-    let local = NSPoint(x: content.bounds.midX, y: content.bounds.midY * 0.45)
-    let start = content.convert(local, to: nil)
+    let bounds = canvas.bounds
+    let local = NSPoint(x: bounds.midX, y: bounds.midY)
+    let start = canvas.convert(local, to: nil)
     sendMouse(.leftMouseDown, at: start, on: panel)
     sendMouse(.leftMouseDragged, at: NSPoint(x: start.x + 70, y: start.y - 36), on: panel)
     sendMouse(.leftMouseDragged, at: NSPoint(x: start.x + 110, y: start.y - 54), on: panel)
@@ -239,13 +249,44 @@ enum AnnotatorMain {
     return panel
   }
 
-  private static func editorHostingView(in view: NSView?) -> NSView? {
-    guard let view else { return nil }
-    if view is EditorHostingView { return view }
-    for subview in view.subviews {
-      if let found = editorHostingView(in: subview) { return found }
+  private static func waitForCanvas(in panel: NSWindow) -> NSView? {
+    let deadline = Date().addingTimeInterval(2)
+    while Date() < deadline {
+      panel.layoutIfNeeded()
+      panel.contentView?.layoutSubtreeIfNeeded()
+      if let canvas = view(identifier: CanvasPassthroughView.identifier, in: panel.contentView),
+         canvas.bounds.width > 1,
+         canvas.bounds.height > 1 {
+        return canvas
+      }
+      RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    }
+    return view(identifier: CanvasPassthroughView.identifier, in: panel.contentView)
+  }
+
+  private static func view(identifier: String, in root: NSView?) -> NSView? {
+    guard let root else { return nil }
+    if root.identifier?.rawValue == identifier { return root }
+    for subview in root.subviews {
+      if let found = view(identifier: identifier, in: subview) { return found }
     }
     return nil
+  }
+
+  private static func viewTree(_ view: NSView?) -> String {
+    guard let view else { return "(no content view)" }
+    var lines: [String] = []
+    func walk(_ view: NSView, depth: Int) {
+      let indent = String(repeating: "  ", count: depth)
+      let name = String(describing: type(of: view))
+      let id = view.identifier?.rawValue ?? ""
+      lines.append("\(indent)\(name) \(id) \(Int(view.bounds.width))x\(Int(view.bounds.height))")
+      for subview in view.subviews {
+        walk(subview, depth: depth + 1)
+      }
+    }
+    walk(view, depth: 0)
+    return lines.joined(separator: "\n")
   }
 
   private static func sendMouse(_ type: NSEvent.EventType, at point: NSPoint, on window: NSWindow) {
