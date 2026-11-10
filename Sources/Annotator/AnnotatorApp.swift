@@ -13,6 +13,21 @@ final class AnnotatorWindow: NSWindow {
   }
 }
 
+/// The canvas is a SwiftUI hosting view. Its default `mouseDownCanMoveWindow`
+/// is true, so a tool drag moves the window even after
+/// `isMovableByWindowBackground` is turned off.
+final class EditorHostingView: NSHostingView<RootView> {
+  override var mouseDownCanMoveWindow: Bool { false }
+}
+
+final class EditorHostingController: NSHostingController<RootView> {
+  override func loadView() {
+    let host = EditorHostingView(rootView: rootView)
+    host.sizingOptions = []
+    view = host
+  }
+}
+
 @main
 enum AnnotatorMain {
   static func main() {
@@ -21,6 +36,9 @@ enum AnnotatorMain {
     }
     if CommandLine.arguments.contains("--ui-self-test") {
       exit(runUISelfTest())
+    }
+    if CommandLine.arguments.contains("--canvas-drag-self-test") {
+      exit(runCanvasDragSelfTest())
     }
     if let index = CommandLine.arguments.firstIndex(of: "--screen-recording-self-test") {
       let next = CommandLine.arguments.index(after: index)
@@ -105,6 +123,144 @@ enum AnnotatorMain {
       return 1
     }
     return 0
+  }
+
+  /// A drag on the canvas must draw, not slide the window. Title-bar drags
+  /// stay available because the window is still titled.
+  private static func runCanvasDragSelfTest() -> Int32 {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let box = UITestBox()
+    DispatchQueue.main.async {
+      box.code = MainActor.assumeIsolated {
+        exerciseCanvasDrag()
+      }
+      app.stop(nil)
+      if let event = NSEvent.otherEvent(
+        with: .applicationDefined,
+        location: .zero,
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: 0,
+        context: nil,
+        subtype: 0,
+        data1: 0,
+        data2: 0
+      ) {
+        app.postEvent(event, atStart: true)
+      }
+    }
+    app.run()
+    return box.code
+  }
+
+  @MainActor
+  private static func exerciseCanvasDrag() -> Int32 {
+    let image = NSImage(size: NSSize(width: 640, height: 400))
+    image.lockFocus()
+    NSColor(calibratedRed: 0.15, green: 0.35, blue: 0.75, alpha: 1).setFill()
+    NSRect(x: 0, y: 0, width: 640, height: 400).fill()
+    image.unlockFocus()
+    let state = AppState(image: image, remembersSession: false)
+    state.tool = .rectangle
+    let panel = makeEditorPanel(state: state)
+    panel.setFrameOrigin(NSPoint(x: 40, y: 80))
+    panel.orderFrontRegardless()
+    panel.makeKey()
+    NSApp.activate(ignoringOtherApps: true)
+    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.4))
+
+    if panel.isMovableByWindowBackground {
+      fputs("canvas drag self-test: window is movable by its background\n", stderr)
+      return 1
+    }
+    guard let host = editorHostingView(in: panel.contentView) else {
+      fputs("canvas drag self-test: canvas hosting view is missing\n", stderr)
+      return 1
+    }
+    if host.mouseDownCanMoveWindow {
+      fputs("canvas drag self-test: canvas hosting view can move the window\n", stderr)
+      return 1
+    }
+    guard let content = panel.contentView else {
+      fputs("canvas drag self-test: editor has no content view\n", stderr)
+      return 1
+    }
+    let origin = panel.frame.origin
+    let local = NSPoint(x: content.bounds.midX, y: content.bounds.midY * 0.45)
+    let start = content.convert(local, to: nil)
+    sendMouse(.leftMouseDown, at: start, on: panel)
+    sendMouse(.leftMouseDragged, at: NSPoint(x: start.x + 70, y: start.y - 36), on: panel)
+    sendMouse(.leftMouseDragged, at: NSPoint(x: start.x + 110, y: start.y - 54), on: panel)
+    RunLoop.current.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05))
+    sendMouse(.leftMouseUp, at: NSPoint(x: start.x + 110, y: start.y - 54), on: panel)
+    let dx = panel.frame.origin.x - origin.x
+    let dy = panel.frame.origin.y - origin.y
+    if hypot(dx, dy) > 0.5 {
+      fputs("canvas drag self-test: window moved by \(dx), \(dy)\n", stderr)
+      return 1
+    }
+    if state.draft == nil && state.annotations.isEmpty {
+      fputs("canvas drag self-test: drag did not reach the canvas tool\n", stderr)
+      return 1
+    }
+    fputs("canvas drag self-test: ok\n", stderr)
+    return 0
+  }
+
+  @MainActor
+  fileprivate static func makeEditorPanel(state: AppState, visible: NSRect? = nil) -> AnnotatorWindow {
+    let visible = visible ?? NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+    let size = AnnotatorChrome.windowSize(for: state.image.size, visible: visible)
+    let panel = AnnotatorWindow(
+      contentRect: NSRect(origin: .zero, size: size),
+      styleMask: [.titled, .closable, .miniaturizable, .resizable],
+      backing: .buffered,
+      defer: false
+    )
+    panel.title = "Annotator"
+    panel.titleVisibility = .hidden
+    panel.titlebarAppearsTransparent = false
+    panel.titlebarSeparatorStyle = .line
+    panel.toolbarStyle = .unified
+    panel.tabbingMode = .disallowed
+    panel.hidesOnDeactivate = false
+    panel.isMovableByWindowBackground = false
+    panel.level = .floating
+    panel.collectionBehavior = WindowBehavior.allSpaces
+    panel.isReleasedWhenClosed = false
+    panel.animationBehavior = .none
+    panel.minSize = NSSize(width: AnnotatorChrome.minWidth, height: AnnotatorChrome.minHeight)
+    let host = EditorHostingController(rootView: RootView(state: state))
+    panel.contentViewController = host
+    panel.toolbar?.allowsUserCustomization = false
+    panel.toolbar?.displayMode = .iconOnly
+    panel.setContentSize(size)
+    return panel
+  }
+
+  private static func editorHostingView(in view: NSView?) -> NSView? {
+    guard let view else { return nil }
+    if view is EditorHostingView { return view }
+    for subview in view.subviews {
+      if let found = editorHostingView(in: subview) { return found }
+    }
+    return nil
+  }
+
+  private static func sendMouse(_ type: NSEvent.EventType, at point: NSPoint, on window: NSWindow) {
+    guard let event = NSEvent.mouseEvent(
+      with: type,
+      location: point,
+      modifierFlags: [],
+      timestamp: ProcessInfo.processInfo.systemUptime,
+      windowNumber: window.windowNumber,
+      context: nil,
+      eventNumber: 1,
+      clickCount: 1,
+      pressure: type == .leftMouseUp ? 0 : 1
+    ) else { return }
+    window.sendEvent(event)
   }
 }
 
@@ -205,40 +361,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
       ?? NSScreen.screens.first
     let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
 
-    let size = AnnotatorChrome.windowSize(for: state.image.size, visible: visible)
-
-    let panel = AnnotatorWindow(
-      contentRect: NSRect(origin: .zero, size: size),
-      styleMask: [.titled, .closable, .miniaturizable, .resizable],
-      backing: .buffered,
-      defer: false
-    )
-    panel.title = "Annotator"
-    panel.titleVisibility = .hidden
-    panel.titlebarAppearsTransparent = false
-    panel.titlebarSeparatorStyle = .line
-    panel.toolbarStyle = .unified
-    panel.tabbingMode = .disallowed
-    panel.hidesOnDeactivate = false
-    panel.isMovableByWindowBackground = true
-    panel.level = .floating
-    panel.collectionBehavior = WindowBehavior.allSpaces
-    panel.isReleasedWhenClosed = false
-    panel.animationBehavior = .none
-    panel.minSize = NSSize(width: AnnotatorChrome.minWidth, height: AnnotatorChrome.minHeight)
+    let panel = AnnotatorMain.makeEditorPanel(state: state, visible: visible)
     panel.delegate = self
-
-    let host = NSHostingController(rootView: RootView(state: state))
-    if let hostingView = host.view as? NSHostingView<RootView> {
-      hostingView.sizingOptions = []
-    }
-    panel.contentViewController = host
-    panel.toolbar?.allowsUserCustomization = false
-    panel.toolbar?.displayMode = .iconOnly
-
     self.panel = panel
 
-    panel.setContentSize(size)
     let frame = panel.frame
     panel.setFrameOrigin(NSPoint(
       x: visible.midX - frame.width / 2,

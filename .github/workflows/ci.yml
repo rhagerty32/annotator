@@ -146,6 +146,7 @@ jobs:
           dist/Annotator.app/Contents/MacOS/Annotator --protocol-self-test
           dist/Annotator.app/Contents/MacOS/AnnotatorBin --protocol-self-test
           dist/Annotator.app/Contents/MacOS/Annotator --ui-self-test
+          dist/Annotator.app/Contents/MacOS/Annotator --canvas-drag-self-test
           # The runner does not reproduce MenuBarAgent's rejection of a foreign
           # image. AnnotatorBin must fail the executable-path assertion instead
           # of being accepted as the menu bar agent.

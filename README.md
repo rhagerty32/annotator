@@ -200,7 +200,7 @@ A published GitHub Release runs `.github/workflows/release.yml`. The job ad-hoc 
 
 The private signing key is the GitHub Actions secret `SPARKLE_PRIVATE_KEY`. The matching public key belongs in `SUPublicEDKey` in `packaging/Info.plist`. Steps are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-The version Sparkle compares is `CFBundleVersion`. This branch sets it to `1.1.0`, and the release workflow replaces it with the tag (`v1.2.0` becomes `1.2.0`). The next release tag has to be greater than the version people installed.
+The version Sparkle compares is `CFBundleVersion`. This tree sets it to `1.1.5`, and the release workflow replaces it with the tag (`v1.2.0` becomes `1.2.0`). The next release tag has to be greater than the version people installed.
 
 ## Project layout
 

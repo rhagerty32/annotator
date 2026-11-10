@@ -127,7 +127,7 @@ Check for Updates uses Sparkle 2.7.1. The feed URL baked into `packaging/Info.pl
 
 `https://github.com/rhagerty32/annotator/releases/latest/download/appcast.xml`
 
-`CFBundleVersion` and `CFBundleShortVersionString` are both the dotted version (`1.1.0` in this tree). Sparkle compares `CFBundleVersion` with `sparkle:version` in the appcast. A release tag `v1.2.0` is published as version `1.2.0`. The next tag must be greater than the version people already installed, or their app will not offer it.
+`CFBundleVersion` and `CFBundleShortVersionString` are both the dotted version (`1.1.5` in this tree). Sparkle compares `CFBundleVersion` with `sparkle:version` in the appcast. A release tag `v1.2.0` is published as version `1.2.0`. The next tag must be greater than the version people already installed, or their app will not offer it.
 
 Publishing a GitHub Release (or running the Release workflow with a tag) is the path that uploads:
 
