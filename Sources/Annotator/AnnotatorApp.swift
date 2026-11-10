@@ -300,15 +300,18 @@ enum AnnotatorMain {
   }
 
   private static func view(_ view: NSView, isInCanvas canvas: NSView) -> Bool {
+    if view === canvas { return true }
     var current: NSView? = view
     while let node = current {
       if node === canvas { return true }
       current = node.superview
     }
-    guard let parent = canvas.superview else { return false }
-    current = view
+    // Hit-testing stops at the hosting view. The canvas marker does not accept
+    // hits, so the hosting view that contains the canvas is the canvas target.
+    // The title bar is not in this chain.
+    current = canvas
     while let node = current {
-      if node === parent { return true }
+      if node === view { return true }
       current = node.superview
     }
     return false
